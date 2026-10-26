@@ -1768,7 +1768,13 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             let look = crate::caret_glide::look(app, ui, content_origin, &geo, bar, shown, since, on);
             if shown && look.opacity > 0.0 {
                 let color = preedit_color.unwrap_or_else(|| caret_color(app));
-                painter.line_segment(look.bar, Stroke::new(1.5, color.gamma_multiply(look.opacity)));
+                if app.session.vim.enabled && app.session.vim.mode == wordcraft_engine::VimMode::Normal {
+                    let block_w = (c.height * 0.55 * scale).max(8.0);
+                    let block_rect = Rect::from_min_max(pos2(look.bar[0].x, y0), pos2(look.bar[0].x + block_w, y1));
+                    painter.rect_filled(block_rect, 0.0, color.gamma_multiply(look.opacity * 0.65));
+                } else {
+                    painter.line_segment(look.bar, Stroke::new(1.5, color.gamma_multiply(look.opacity)));
+                }
             }
             if focused {
                 ui.ctx().request_repaint_after(std::time::Duration::from_millis(530 - (since as u64 % 530)));

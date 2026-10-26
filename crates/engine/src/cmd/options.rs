@@ -35,11 +35,12 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 /// The on/off settings by their `file.options` name.
-fn flags() -> [(&'static str, fn(&mut Prefs) -> &mut bool); 7] {
+fn flags() -> [(&'static str, fn(&mut Prefs) -> &mut bool); 8] {
     [
         ("typingReplacesSelection", |p| &mut p.typing_replaces_selection),
         ("insertKeyOvertype", |p| &mut p.insert_key_overtype),
         ("overtype", |p| &mut p.overtype),
+        ("vimMode", |p| &mut p.vim_mode),
         ("markGrammar", |p| &mut p.mark_grammar),
         ("ignoreUppercase", |p| &mut p.ignore_uppercase),
         ("ignoreNumbers", |p| &mut p.ignore_numbers),
@@ -181,6 +182,7 @@ fn options(s: &mut Session, v: &Value) -> CmdResult {
     for (f, b) in flag_values {
         *f(&mut s.prefs) = b;
     }
+    s.vim.enabled = s.prefs.vim_mode;
     for (f, b) in mark_values {
         *f(&mut s.prefs.marks) = b;
     }
@@ -224,6 +226,7 @@ pub fn current(s: &Session) -> Value {
         "typingReplacesSelection": pr.typing_replaces_selection,
         "insertKeyOvertype": pr.insert_key_overtype,
         "overtype": pr.overtype,
+        "vimMode": pr.vim_mode,
         "marks": pr.marks,
         "checkSpelling": s.view.proofing,
         "markGrammar": pr.mark_grammar,

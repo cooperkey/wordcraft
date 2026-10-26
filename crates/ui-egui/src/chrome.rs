@@ -592,6 +592,20 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                 if st(ui, &wtxt).clicked() {
                     let _ = app.run("ui.dialog", json!({"name": "wordCount"}));
                 }
+                let vim_badge = if app.session.vim.enabled {
+                    if app.session.vim.mode == wordcraft_engine::VimMode::Command {
+                        format!("{}█", app.session.vim.cmd_input)
+                    } else if let Some(msg) = &app.session.vim.status_msg {
+                        format!("{} | {msg}", app.session.vim.mode.badge())
+                    } else {
+                        app.session.vim.mode.badge().to_string()
+                    }
+                } else {
+                    "Vim: Off".to_string()
+                };
+                if st(ui, &vim_badge).on_hover_text(tl!("Toggle Vim Mode (Mod+Alt+V)")).clicked() {
+                    let _ = app.run("vim.toggle", json!({}));
+                }
                 if app.session.sel.focus.story != StoryRef::Body && !crate::canvas::in_text_box(app) {
                     let label = match crate::canvas::part_kind(app, app.session.sel.focus.story) {
                         Some(PartKind::Footnote) => tl!("Editing footnote"),

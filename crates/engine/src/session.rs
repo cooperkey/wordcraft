@@ -593,6 +593,8 @@ pub struct Session {
     pub system_region: wordcraft_geom::Region,
     /// Custom keyboard shortcuts (`tools.customizeKeyboard`); the front end saves them too.
     pub keymap: crate::KeyMap,
+    /// Native Vim modal editing state.
+    pub vim: crate::vim::VimState,
     /// Custom ribbon and Quick Access Toolbar (`tools.customizeRibbon`); the front end saves it too.
     pub ribbon: crate::RibbonLayout,
     /// The language new blank documents (and opened plain text) are written in, a BCP 47 tag;
@@ -738,6 +740,8 @@ pub struct Prefs {
     /// in Word). A damaged saved value reads as the defaults.
     #[serde(deserialize_with = "crate::cmd::tools::lenient_autocorrect")]
     pub autocorrect: crate::cmd::tools::AutoCorrectPrefs,
+    /// Enable Vim modal editing mode.
+    pub vim_mode: bool,
 }
 
 impl Default for Prefs {
@@ -762,6 +766,7 @@ impl Default for Prefs {
             detect_language: true,
             default_language: None,
             autocorrect: Default::default(),
+            vim_mode: false,
         }
     }
 }
@@ -959,6 +964,7 @@ impl Session {
             prefs: Prefs::default(),
             system_region: Default::default(),
             keymap: crate::KeyMap::default(),
+            vim: crate::vim::VimState::default(),
             ribbon: crate::RibbonLayout::default(),
             editing_lang: None,
             read_aloud: Default::default(),
@@ -1747,6 +1753,7 @@ impl Session {
             prefs: _,
             system_region: _,
             keymap: _,
+            vim: _,
             ribbon: _,
             // A preference for new documents, like `prefs`: not part of this document.
             editing_lang: _,
@@ -1981,6 +1988,21 @@ impl Session {
     /// unsaved changes, forces no relayout and leaves the redo stack alone (#23).
     fn unchanged(&self, doc: &Document, sel: &Selection, column: &Option<ColumnBlock>, pending: &Option<CharProps>) -> bool {
         doc.same_content(&self.doc) && *sel == self.sel && *column == self.column && *pending == self.pending
+    }
+
+    /// Process a keystroke through the Vim modal state machine.
+    pub fn handle_vim_key(
+        &mut self,
+        key_name: &str,
+        text: Option<&str>,
+        ctrl: bool,
+        alt: bool,
+        shift: bool,
+    ) -> bool {
+        let mut vim = std::mem::take(&mut self.vim);
+        let handled = vim.handle_key(self, key_name, text, ctrl, alt, shift);
+        self.vim = vim;
+        handled
     }
 
     /// Run a command by id with JSON params (the single entry point for the UI, CLI, MCP and

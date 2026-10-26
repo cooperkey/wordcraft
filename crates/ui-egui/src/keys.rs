@@ -547,6 +547,14 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
         }
         match e {
             egui::Event::Text(t) => {
+                if app.session.vim.enabled {
+                    if app.session.vim.mode == wordcraft_engine::VimMode::Command {
+                        app.session.vim.cmd_input.push_str(&t);
+                        continue;
+                    } else if app.session.vim.mode != wordcraft_engine::VimMode::Insert {
+                        continue;
+                    }
+                }
                 let m = ctx.input(|i| i.modifiers);
                 let is_cmd = if cfg!(target_os = "macos") { m.command } else { (m.command || m.ctrl) && !m.alt };
                 if is_cmd {
@@ -686,7 +694,80 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                 if leave_full_screen(app, ctx, key, modifiers, true) {
                     continue;
                 }
-                app.canvas.swallow_text = dispatch(app, key, modifiers) && modifiers.alt;
+                if app.session.vim.enabled {
+                    if key == Key::Escape || ((modifiers.ctrl || modifiers.command) && key == Key::OpenBracket) {
+                        let _ = app.session.handle_vim_key("Escape", None, false, false, false);
+                        app.canvas.swallow_text = true;
+                        continue;
+                    }
+                    if app.session.vim.mode == wordcraft_engine::VimMode::Command {
+                        if key == Key::Enter || key == Key::Backspace {
+                            let name = key_name(key).unwrap_or("");
+                            let _ = app.session.handle_vim_key(name, None, modifiers.ctrl, modifiers.alt, modifiers.shift);
+                            app.canvas.swallow_text = true;
+                            continue;
+                        }
+                    } else if app.session.vim.mode != wordcraft_engine::VimMode::Insert && !modifiers.command {
+                        let name = key_name(key).unwrap_or("");
+                        let text = match key {
+                            Key::A => Some(if modifiers.shift { "A" } else { "a" }),
+                            Key::B => Some(if modifiers.shift { "B" } else { "b" }),
+                            Key::C => Some(if modifiers.shift { "C" } else { "c" }),
+                            Key::D => Some(if modifiers.shift { "D" } else { "d" }),
+                            Key::E => Some(if modifiers.shift { "E" } else { "e" }),
+                            Key::G => Some(if modifiers.shift { "G" } else { "g" }),
+                            Key::H => Some(if modifiers.shift { "H" } else { "h" }),
+                            Key::I => Some(if modifiers.shift { "I" } else { "i" }),
+                            Key::J => Some(if modifiers.shift { "J" } else { "j" }),
+                            Key::K => Some(if modifiers.shift { "K" } else { "k" }),
+                            Key::L => Some(if modifiers.shift { "L" } else { "l" }),
+                            Key::O => Some(if modifiers.shift { "O" } else { "o" }),
+                            Key::P => Some(if modifiers.shift { "P" } else { "p" }),
+                            Key::R => Some(if modifiers.shift { "R" } else { "r" }),
+                            Key::U => Some(if modifiers.shift { "U" } else { "u" }),
+                            Key::V => Some(if modifiers.shift { "V" } else { "v" }),
+                            Key::W => Some(if modifiers.shift { "W" } else { "w" }),
+                            Key::X => Some(if modifiers.shift { "X" } else { "x" }),
+                            Key::Y => Some(if modifiers.shift { "Y" } else { "y" }),
+                            Key::Num0 => Some(if modifiers.shift { ")" } else { "0" }),
+                            Key::Num1 => Some(if modifiers.shift { "!" } else { "1" }),
+                            Key::Num2 => Some(if modifiers.shift { "@" } else { "2" }),
+                            Key::Num3 => Some(if modifiers.shift { "#" } else { "3" }),
+                            Key::Num4 => Some(if modifiers.shift { "$" } else { "4" }),
+                            Key::Num5 => Some(if modifiers.shift { "%" } else { "5" }),
+                            Key::Num6 => Some(if modifiers.shift { "^" } else { "6" }),
+                            Key::Num7 => Some(if modifiers.shift { "&" } else { "7" }),
+                            Key::Num8 => Some(if modifiers.shift { "*" } else { "8" }),
+                            Key::Num9 => Some(if modifiers.shift { "(" } else { "9" }),
+                            Key::OpenBracket => Some(if modifiers.shift { "{" } else { "[" }),
+                            Key::CloseBracket => Some(if modifiers.shift { "}" } else { "]" }),
+                            Key::Slash => Some(if modifiers.shift { "?" } else { "/" }),
+                            Key::Questionmark => Some("?"),
+                            Key::Colon => Some(":"),
+                            Key::Semicolon => Some(if modifiers.shift { ":" } else { ";" }),
+                            Key::Quote => Some(if modifiers.shift { "\"" } else { "'" }),
+                            Key::Backtick => Some(if modifiers.shift { "~" } else { "`" }),
+                            Key::Space => Some(" "),
+                            _ => None,
+                        };
+                        let ctrl = modifiers.ctrl || (cfg!(target_os = "macos") && modifiers.command);
+                        let handled = app.session.handle_vim_key(
+                            name,
+                            text,
+                            ctrl,
+                            modifiers.alt,
+                            modifiers.shift,
+                        );
+                        app.canvas.swallow_text = true;
+                        if handled {
+                            continue;
+                        }
+                    }
+                }
+                if dispatch(app, key, modifiers) {
+                    app.canvas.swallow_text = modifiers.alt || (app.session.vim.enabled && app.session.vim.mode != wordcraft_engine::VimMode::Insert);
+                    continue;
+                }
             }
             _ => {}
         }

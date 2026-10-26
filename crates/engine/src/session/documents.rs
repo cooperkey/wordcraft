@@ -259,6 +259,7 @@ impl Session {
             prefs: _,
             system_region: _,
             keymap: _,
+            vim: _,
             ribbon: _,
             editing_lang: _,
             math_latex: _,

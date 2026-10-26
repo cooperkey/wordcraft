@@ -19,6 +19,7 @@ pub mod ribbon;
 pub mod sample;
 mod session;
 pub mod speech;
+pub mod vim;
 
 use std::collections::HashMap;
 
@@ -31,6 +32,7 @@ pub use session::{
     CellRange, ColumnBlock, DocInfo, DocState, EditSnapshot, FindState, MathEdit, Prefs, Selection, Session, StylesPaneDock, UNDO_LIST_MAX,
     ViewState, WindowView, blank_document, next_math_session, set_system_locale,
 };
+pub use vim::{VimConfig, VimMode, VimState};
 /// The outcome a command reports for IME receipt classification.
 ///
 /// A command that can be called by an input method must classify its committed effects. Only a
@@ -209,5 +211,7 @@ mod tests_ime_noop;
 mod tests_revision_checks;
 #[cfg(test)]
 mod tests_typing;
+#[cfg(test)]
+mod tests_vim;
 #[cfg(test)]
 mod tests_wordart;
