@@ -316,3 +316,173 @@ fn vim_noh_clears_matches() {
 
     assert!(s.find.results.is_empty());
 }
+
+#[test]
+fn vim_char_find_and_repeat() {
+    let mut s = new_session("The quick brown fox jumps over the lazy dog.");
+    s.sel = Selection::caret(Pos::body(0, 0));
+
+    // 'f' followed by 'q' jumps to 'q' in "quick" (offset 4)
+    assert!(s.handle_vim_key("F", Some("f"), false, false, false));
+    assert!(s.handle_vim_key("Q", Some("q"), false, false, false));
+    assert_eq!(s.sel.focus.off, 4);
+
+    // 'f' followed by 'o' -> 'o' in "brown" (offset 12)
+    s.sel = Selection::caret(Pos::body(0, 0));
+    assert!(s.handle_vim_key("F", Some("f"), false, false, false));
+    assert!(s.handle_vim_key("O", Some("o"), false, false, false));
+    assert_eq!(s.sel.focus.off, 12);
+
+    // ';' repeats search forward to next 'o' in "fox" (offset 17)
+    assert!(s.handle_vim_key("Semicolon", Some(";"), false, false, false));
+    assert_eq!(s.sel.focus.off, 17);
+
+    // ',' repeats search backward to previous 'o' in "brown" (offset 12)
+    assert!(s.handle_vim_key("Comma", Some(","), false, false, false));
+    assert_eq!(s.sel.focus.off, 12);
+
+    // 't' followed by 'b' -> caret rests right before 'b' (offset 9)
+    s.sel = Selection::caret(Pos::body(0, 0));
+    assert!(s.handle_vim_key("T", Some("t"), false, false, false));
+    assert!(s.handle_vim_key("B", Some("b"), false, false, false));
+    assert_eq!(s.sel.focus.off, 9);
+}
+
+#[test]
+fn vim_visual_char_find_vf() {
+    let mut s = new_session("Hello World. Test.");
+    s.sel = Selection::caret(Pos::body(0, 0));
+
+    // 'v' enters Visual mode
+    assert!(s.handle_vim_key("V", Some("v"), false, false, false));
+    assert_eq!(s.vim.mode, VimMode::Visual);
+
+    // 'f' then '.' extends selection to the first '.'
+    assert!(s.handle_vim_key("F", Some("f"), false, false, false));
+    assert!(s.handle_vim_key("Period", Some("."), false, false, false));
+    assert_eq!(s.sel.anchor.off, 0);
+    assert_eq!(s.sel.focus.off, 12); // "Hello World." is 12 chars (index 0..12)
+}
+
+#[test]
+fn vim_operator_char_find_df() {
+    let mut s = new_session("delete.until here");
+    s.sel = Selection::caret(Pos::body(0, 0));
+
+    // 'd' followed by 'f' and '.' deletes "delete."
+    assert!(s.handle_vim_key("D", Some("d"), false, false, false));
+    assert!(s.handle_vim_key("F", Some("f"), false, false, false));
+    assert!(s.handle_vim_key("Period", Some("."), false, false, false));
+
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, "until here");
+}
+
+#[test]
+fn vim_dot_repeat_commands() {
+    let mut s = new_session("abcdefg");
+    s.sel = Selection::caret(Pos::body(0, 0));
+
+    // 'x' deletes 'a' -> "bcdefg"
+    assert!(s.handle_vim_key("X", Some("x"), false, false, false));
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, "bcdefg");
+
+    // '.' repeats 'x' -> deletes 'b' -> "cdefg"
+    assert!(s.handle_vim_key("Period", Some("."), false, false, false));
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, "cdefg");
+
+    // '.' repeats again -> deletes 'c' -> "defg"
+    assert!(s.handle_vim_key("Period", Some("."), false, false, false));
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, "defg");
+}
+
+#[test]
+fn vim_surround_operations() {
+    let mut s = new_session("hello world");
+    s.sel = Selection::caret(Pos::body(0, 0));
+
+    // 'ysiw"' surrounds "hello" with quotes -> "“hello” world"
+    assert!(s.handle_vim_key("Y", Some("y"), false, false, false));
+    assert!(s.handle_vim_key("S", Some("s"), false, false, false));
+    assert!(s.handle_vim_key("I", Some("i"), false, false, false));
+    assert!(s.handle_vim_key("W", Some("w"), false, false, false));
+    assert!(s.handle_vim_key("Quote", Some("\""), false, false, false));
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, "“hello” world");
+
+    // 'cs"\'' changes surrounding quotes to single quotes -> "‘hello’ world"
+    assert!(s.handle_vim_key("C", Some("c"), false, false, false));
+    assert!(s.handle_vim_key("S", Some("s"), false, false, false));
+    assert!(s.handle_vim_key("Quote", Some("\""), false, false, false));
+    assert!(s.handle_vim_key("Quote", Some("'"), false, false, false));
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, "‘hello’ world");
+
+    // 'ds\'' deletes surrounding single quotes -> "hello world"
+    assert!(s.handle_vim_key("D", Some("d"), false, false, false));
+    assert!(s.handle_vim_key("S", Some("s"), false, false, false));
+    assert!(s.handle_vim_key("Quote", Some("'"), false, false, false));
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, "hello world");
+}
+
+#[test]
+fn vim_flash_jump() {
+    let mut s = new_session("The quick brown fox jumps");
+    s.sel = Selection::caret(Pos::body(0, 0));
+
+    // 's' followed by 'f' and 'o' jumps to "fox" (offset 16)
+    assert!(s.handle_vim_key("S", Some("s"), false, false, false));
+    assert!(s.handle_vim_key("F", Some("f"), false, false, false));
+    assert!(s.handle_vim_key("O", Some("o"), false, false, false));
+    assert_eq!(s.sel.focus.off, 16);
+}
+
+#[test]
+fn vim_visual_line_swap() {
+    let mut s = new_session("First line\nSecond line");
+    s.sel = Selection::caret(Pos::body(0, 0));
+
+    // Enter VisualLine mode
+    assert!(s.handle_vim_key("V", Some("V"), false, false, false));
+    assert_eq!(s.vim.mode, VimMode::VisualLine);
+
+    // 'J' swaps current line down
+    assert!(s.handle_vim_key("J", Some("J"), false, false, false));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "Second line");
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).unwrap().text, "First line");
+
+    // 'K' swaps current line back up
+    assert!(s.handle_vim_key("K", Some("K"), false, false, false));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "First line");
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).unwrap().text, "Second line");
+}
+
+#[test]
+fn vim_leader_semicolon_and_bold() {
+    let mut s = new_session("const x = 42");
+    s.sel = Selection::caret(Pos::body(0, 0));
+
+    // Space then ';' appends semicolon at the end of the line
+    assert!(s.handle_vim_key("Space", Some(" "), false, false, false));
+    assert_eq!(s.vim.pending, "<leader>");
+    assert!(s.handle_vim_key("Semicolon", Some(";"), false, false, false));
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, "const x = 42;");
+}
+
+#[test]
+fn vim_viewport_centering_keys() {
+    let mut s = new_session("Line for centering");
+    assert_eq!(s.vim.viewport_req, None);
+
+    // 'zz' requests center viewport
+    assert!(s.handle_vim_key("Z", Some("z"), false, false, false));
+    assert!(s.handle_vim_key("Z", Some("z"), false, false, false));
+    assert_eq!(s.vim.viewport_req, Some("center"));
+
+    // 'zt' requests top viewport
+    assert!(s.handle_vim_key("Z", Some("z"), false, false, false));
+    assert!(s.handle_vim_key("T", Some("t"), false, false, false));
+    assert_eq!(s.vim.viewport_req, Some("top"));
+
+    // 'zb' requests bottom viewport
+    assert!(s.handle_vim_key("Z", Some("z"), false, false, false));
+    assert!(s.handle_vim_key("B", Some("b"), false, false, false));
+    assert_eq!(s.vim.viewport_req, Some("bottom"));
+}

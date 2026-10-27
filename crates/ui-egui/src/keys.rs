@@ -715,20 +715,27 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                             Key::C => Some(if modifiers.shift { "C" } else { "c" }),
                             Key::D => Some(if modifiers.shift { "D" } else { "d" }),
                             Key::E => Some(if modifiers.shift { "E" } else { "e" }),
+                            Key::F => Some(if modifiers.shift { "F" } else { "f" }),
                             Key::G => Some(if modifiers.shift { "G" } else { "g" }),
                             Key::H => Some(if modifiers.shift { "H" } else { "h" }),
                             Key::I => Some(if modifiers.shift { "I" } else { "i" }),
                             Key::J => Some(if modifiers.shift { "J" } else { "j" }),
                             Key::K => Some(if modifiers.shift { "K" } else { "k" }),
                             Key::L => Some(if modifiers.shift { "L" } else { "l" }),
+                            Key::M => Some(if modifiers.shift { "M" } else { "m" }),
+                            Key::N => Some(if modifiers.shift { "N" } else { "n" }),
                             Key::O => Some(if modifiers.shift { "O" } else { "o" }),
                             Key::P => Some(if modifiers.shift { "P" } else { "p" }),
+                            Key::Q => Some(if modifiers.shift { "Q" } else { "q" }),
                             Key::R => Some(if modifiers.shift { "R" } else { "r" }),
+                            Key::S => Some(if modifiers.shift { "S" } else { "s" }),
+                            Key::T => Some(if modifiers.shift { "T" } else { "t" }),
                             Key::U => Some(if modifiers.shift { "U" } else { "u" }),
                             Key::V => Some(if modifiers.shift { "V" } else { "v" }),
                             Key::W => Some(if modifiers.shift { "W" } else { "w" }),
                             Key::X => Some(if modifiers.shift { "X" } else { "x" }),
                             Key::Y => Some(if modifiers.shift { "Y" } else { "y" }),
+                            Key::Z => Some(if modifiers.shift { "Z" } else { "z" }),
                             Key::Num0 => Some(if modifiers.shift { ")" } else { "0" }),
                             Key::Num1 => Some(if modifiers.shift { "!" } else { "1" }),
                             Key::Num2 => Some(if modifiers.shift { "@" } else { "2" }),
@@ -741,6 +748,10 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                             Key::Num9 => Some(if modifiers.shift { "(" } else { "9" }),
                             Key::OpenBracket => Some(if modifiers.shift { "{" } else { "[" }),
                             Key::CloseBracket => Some(if modifiers.shift { "}" } else { "]" }),
+                            Key::Period => Some(if modifiers.shift { ">" } else { "." }),
+                            Key::Comma => Some(if modifiers.shift { "<" } else { "," }),
+                            Key::Minus => Some(if modifiers.shift { "_" } else { "-" }),
+                            Key::Equals => Some(if modifiers.shift { "+" } else { "=" }),
                             Key::Slash => Some(if modifiers.shift { "?" } else { "/" }),
                             Key::Questionmark => Some("?"),
                             Key::Colon => Some(":"),
@@ -760,6 +771,7 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                         );
                         app.canvas.swallow_text = true;
                         if handled {
+                            app.canvas.scroll_to_caret = true;
                             continue;
                         }
                     }

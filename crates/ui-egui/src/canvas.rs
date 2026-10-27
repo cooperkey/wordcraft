@@ -1228,6 +1228,19 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 app.canvas.scroll_request = Some(vec2((pr.left() - GAP).max(0.0), 0.0));
             }
         }
+    } else if let Some(req) = app.session.vim.viewport_req.take()
+        && let Some(c) = caret
+        && let Some(pr) = geo.rects.get(c.page)
+    {
+        let caret_y = pr.min.y + c.top * geo.scale;
+        let viewport_h = area.height();
+        let target_y = match req {
+            "center" => (caret_y - viewport_h * 0.5).max(0.0),
+            "top" => (caret_y - 40.0).max(0.0),
+            "bottom" => (caret_y - viewport_h + 80.0).max(0.0),
+            _ => caret_y,
+        };
+        app.canvas.scroll_request = Some(vec2(app.canvas.scroll_offset.x, target_y));
     } else if app.canvas.scroll_to_caret
         && let Some(c) = caret
         && let Some(pr) = geo.rects.get(c.page)
@@ -1236,7 +1249,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             pos2(pr.min.x + c.x * geo.scale, pr.min.y + c.top * geo.scale),
             vec2((c.width * geo.scale).max(2.0), c.height * geo.scale),
         );
-        scroll_target = Some(r.expand2(vec2(40.0, 60.0)));
+        let scrolloff = if app.session.vim.enabled { 140.0 } else { 60.0 };
+        scroll_target = Some(r.expand2(vec2(40.0, scrolloff)));
     }
     app.canvas.scroll_to_caret = false;
     let mut origin = area.min;

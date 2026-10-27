@@ -5,12 +5,18 @@
 
 pub mod config;
 pub mod ex;
+pub mod flash;
+pub mod motion;
+pub mod repeat;
+pub mod surround;
 pub mod text_object;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub use config::VimConfig;
+pub use motion::CharFind;
+pub use repeat::LastVimChange;
 use crate::{Selection, Session};
 
 /// An operator waiting for a motion or text object (`d`, `c`, `y`).
@@ -74,6 +80,14 @@ pub struct VimState {
     pub cmd_input: String,
     /// Optional status or feedback message.
     pub status_msg: Option<String>,
+    /// Last character find operation for repeatability with `;` and `,`.
+    pub last_char_find: Option<CharFind>,
+    /// Last modifying edit for dot repeat (`.`).
+    pub last_change: Option<LastVimChange>,
+    /// Viewport scroll target request (e.g. "center", "top", "bottom").
+    pub viewport_req: Option<&'static str>,
+    /// Insert text buffer recorded during Insert mode for repeating change operations.
+    pub insert_buf: String,
 }
 
 impl Default for VimState {
@@ -93,6 +107,10 @@ impl Default for VimState {
             config,
             cmd_input: String::new(),
             status_msg: None,
+            last_char_find: None,
+            last_change: None,
+            viewport_req: None,
+            insert_buf: String::new(),
         }
     }
 }
@@ -213,6 +231,52 @@ impl VimState {
                     self.reset_pending();
                     return true;
                 }
+                match c {
+                    ';' => {
+                        let _ = session.run("caret.end", &json!({}));
+                        let _ = session.run("text.insert", &json!({"text": ";"}));
+                        self.reset_pending();
+                        return true;
+                    }
+                    'b' => {
+                        let _ = session.run("select.word", &json!({}));
+                        let _ = session.run("format.bold", &json!({}));
+                        self.reset_pending();
+                        return true;
+                    }
+                    'i' => {
+                        let _ = session.run("select.word", &json!({}));
+                        let _ = session.run("format.italic", &json!({}));
+                        self.reset_pending();
+                        return true;
+                    }
+                    's' => {
+                        let _ = session.run("select.word", &json!({}));
+                        let _ = session.run("format.strikethrough", &json!({}));
+                        self.reset_pending();
+                        return true;
+                    }
+                    'h' => {
+                        let _ = session.run("select.word", &json!({}));
+                        let _ = session.run("format.highlight", &json!({}));
+                        self.reset_pending();
+                        return true;
+                    }
+                    'c' => {
+                        let _ = session.run("select.word", &json!({}));
+                        let _ = session.run("format.code", &json!({}));
+                        self.reset_pending();
+                        return true;
+                    }
+                    '1' => { let _ = session.run("style.heading1", &json!({})); self.reset_pending(); return true; }
+                    '2' => { let _ = session.run("style.heading2", &json!({})); self.reset_pending(); return true; }
+                    '3' => { let _ = session.run("style.heading3", &json!({})); self.reset_pending(); return true; }
+                    '4' => { let _ = session.run("style.heading4", &json!({})); self.reset_pending(); return true; }
+                    '5' => { let _ = session.run("style.heading5", &json!({})); self.reset_pending(); return true; }
+                    '6' => { let _ = session.run("style.heading6", &json!({})); self.reset_pending(); return true; }
+                    'x' => { let _ = session.run("list.bullet", &json!({})); self.reset_pending(); return true; }
+                    _ => {}
+                }
             }
             self.reset_pending();
             return true;
@@ -232,11 +296,13 @@ impl VimState {
             match key_name {
                 "D" => {
                     let _ = session.run("caret.pageDown", &json!({}));
+                    self.viewport_req = Some("center");
                     self.count = None;
                     return true;
                 }
                 "U" => {
                     let _ = session.run("caret.pageUp", &json!({}));
+                    self.viewport_req = Some("center");
                     self.count = None;
                     return true;
                 }
@@ -254,15 +320,48 @@ impl VimState {
             return self.handle_operator_pending(session, op, key_name, input_char);
         }
 
-        // Two-character motion sequences
+        // Multi-character pending sequences
         if !self.pending.is_empty() {
-            let p = std::mem::take(&mut self.pending);
+            let p = self.pending.clone();
             if p == "g" && input_char == Some('g') {
                 let _ = session.run("caret.docStart", &json!({}));
-                self.count = None;
+                self.reset_pending();
                 return true;
             }
-            self.count = None;
+            if p == "z" {
+                match input_char {
+                    Some('z') => { self.viewport_req = Some("center"); }
+                    Some('t') => { self.viewport_req = Some("top"); }
+                    Some('b') => { self.viewport_req = Some("bottom"); }
+                    _ => {}
+                }
+                self.reset_pending();
+                return true;
+            }
+            if matches!(p.as_str(), "f" | "F" | "t" | "T") {
+                if let Some(target) = input_char {
+                    let forward = p == "f" || p == "t";
+                    let till = p == "t" || p == "T";
+                    let find = motion::CharFind { target, forward, till };
+                    self.last_char_find = Some(find);
+                    motion::execute_char_find(session, find, false);
+                }
+                self.reset_pending();
+                return true;
+            }
+            if p.starts_with('s') && p.len() == 2 {
+                if let Some(c2) = input_char {
+                    let c1 = p.chars().nth(1).unwrap_or(' ');
+                    flash::flash_jump(session, c1, c2);
+                }
+                self.reset_pending();
+                return true;
+            } else if p == "s" && let Some(c1) = input_char {
+                self.pending = format!("s{c1}");
+                return true;
+            }
+
+            self.reset_pending();
             return true;
         }
 
@@ -342,8 +441,60 @@ impl VimState {
                 let _ = session.run("caret.docEnd", &json!({}));
                 true
             }
+            Some('z') => {
+                self.pending = "z".to_string();
+                true
+            }
+            Some('s') => {
+                self.pending = "s".to_string();
+                true
+            }
+            Some('J') => {
+                let _ = session.run("caret.end", &json!({}));
+                let _ = session.run("text.delete", &json!({}));
+                self.last_change = Some(LastVimChange::Join);
+                true
+            }
+            Some('.') => {
+                if let Some(ch) = self.last_change.clone() {
+                    for _ in 0..cnt {
+                        ch.replay(session);
+                    }
+                }
+                true
+            }
+            Some('f') => {
+                self.pending = "f".to_string();
+                true
+            }
+            Some('F') => {
+                self.pending = "F".to_string();
+                true
+            }
+            Some('t') => {
+                self.pending = "t".to_string();
+                true
+            }
+            Some('T') => {
+                self.pending = "T".to_string();
+                true
+            }
+            Some(';') => {
+                if let Some(find) = self.last_char_find {
+                    motion::execute_char_find(session, find, false);
+                }
+                true
+            }
+            Some(',') => {
+                if let Some(mut find) = self.last_char_find {
+                    find.forward = !find.forward;
+                    motion::execute_char_find(session, find, false);
+                }
+                true
+            }
             Some('x') => {
                 repeat(cnt, || session.run("text.delete", &json!({})));
+                self.last_change = Some(LastVimChange::DeleteChar);
                 true
             }
             Some('u') => {
@@ -352,6 +503,7 @@ impl VimState {
             }
             Some('p') => {
                 let _ = session.run("edit.paste", &json!({}));
+                self.last_change = Some(LastVimChange::Paste);
                 true
             }
             Some('i') => {
@@ -465,6 +617,7 @@ impl VimState {
                 match op {
                     VimOp::Delete => {
                         let _ = session.run("edit.cut", &json!({}));
+                        self.last_change = Some(LastVimChange::DeleteLine);
                     }
                     VimOp::Change => {
                         let _ = session.run("edit.cut", &json!({}));
@@ -478,6 +631,117 @@ impl VimState {
             }
             self.reset_pending();
             return true;
+        }
+
+        // Inline character search following operator: df., dt), dF:, dT;
+        if self.pending.is_empty()
+            && let Some(c) = input_char
+            && matches!(c, 'f' | 'F' | 't' | 'T')
+        {
+            self.pending = c.to_string();
+            return true;
+        }
+
+        if !self.pending.is_empty() && matches!(self.pending.as_str(), "f" | "F" | "t" | "T") {
+            let p = self.pending.clone();
+            if let Some(target) = input_char {
+                let forward = p == "f" || p == "t";
+                let till = p == "t" || p == "T";
+                let find = motion::CharFind { target, forward, till };
+                self.last_char_find = Some(find);
+                if motion::execute_char_find(session, find, true) {
+                    self.apply_operator_to_selection(session, op);
+                    if op == VimOp::Delete {
+                        self.last_change = Some(LastVimChange::DeleteCharFind(find));
+                    }
+                }
+            }
+            self.reset_pending();
+            return true;
+        }
+
+        // Delete surround: ds{char}
+        if op == VimOp::Delete && self.pending.is_empty() && input_char == Some('s') {
+            self.pending = "ds".to_string();
+            return true;
+        }
+
+        if op == VimOp::Delete && self.pending == "ds" {
+            if let Some(target) = input_char
+                && surround::delete_surround(session, target)
+            {
+                self.last_change = Some(LastVimChange::SurroundDelete(target));
+            }
+            self.reset_pending();
+            return true;
+        }
+
+        // Change surround: cs{old}{new}
+        if op == VimOp::Change && self.pending.is_empty() && input_char == Some('s') {
+            self.pending = "cs".to_string();
+            return true;
+        }
+
+        if op == VimOp::Change && self.pending.starts_with("cs") {
+            if self.pending == "cs" {
+                if let Some(old) = input_char {
+                    self.pending = format!("cs{old}");
+                    return true;
+                }
+            } else if self.pending.len() == 3 {
+                if let Some(new) = input_char {
+                    let old = self.pending.chars().nth(2).unwrap_or('"');
+                    if surround::change_surround(session, old, new) {
+                        self.last_change = Some(LastVimChange::SurroundChange { old, new });
+                    }
+                }
+                self.reset_pending();
+                return true;
+            }
+        }
+
+        // Surround operator: ys{motion/obj}{char}
+        if op == VimOp::Yank && self.pending.is_empty() && input_char == Some('s') {
+            self.pending = "ys".to_string();
+            return true;
+        }
+
+        if op == VimOp::Yank && self.pending.starts_with("ys") {
+            if self.pending == "ys" {
+                if let Some(c) = input_char {
+                    if c == 'i' || c == 'a' {
+                        self.pending = format!("ys{c}");
+                        return true;
+                    } else if c == 'w' {
+                        self.pending = "ysw".to_string();
+                        return true;
+                    }
+                }
+            } else if self.pending == "ysi" || self.pending == "ysa" {
+                if let Some(target) = input_char {
+                    self.pending = format!("{}{target}", self.pending);
+                    return true;
+                }
+            } else if self.pending.len() == 4 {
+                if let Some(delim) = input_char {
+                    let inner = self.pending.chars().nth(2) == Some('i');
+                    let target = self.pending.chars().nth(3).unwrap_or('w');
+                    if let Some((start, end)) = text_object::find_text_object(session, target, inner) {
+                        session.sel = Selection { anchor: start, focus: end };
+                        surround::wrap_selection(session, delim);
+                        self.last_change = Some(LastVimChange::SurroundWrap { target, inner, delim });
+                    }
+                }
+                self.reset_pending();
+                return true;
+            } else if self.pending == "ysw" {
+                if let Some(delim) = input_char {
+                    let _ = session.run("select.word", &json!({}));
+                    surround::wrap_selection(session, delim);
+                }
+                self.reset_pending();
+                return true;
+            }
         }
 
         // Text object prefix: i (inner) or a (around)
@@ -497,6 +761,9 @@ impl VimState {
             {
                 session.sel = Selection { anchor: start, focus: end };
                 self.apply_operator_to_selection(session, op);
+                if op == VimOp::Delete {
+                    self.last_change = Some(LastVimChange::DeleteTextObject { target, inner });
+                }
             }
             self.reset_pending();
             return true;
@@ -561,6 +828,20 @@ impl VimState {
 
         if ran {
             self.apply_operator_to_selection(session, op);
+            if op == VimOp::Delete && let Some(m) = input_char {
+                let m_name = match m {
+                    'w' => "caret.wordRight",
+                    'b' => "caret.wordLeft",
+                    'e' => "caret.wordRight",
+                    '$' => "caret.end",
+                    '0' | '^' => "caret.home",
+                    '{' => "caret.paraUp",
+                    '}' => "caret.paraDown",
+                    'G' => "caret.docEnd",
+                    _ => "caret.wordRight",
+                };
+                self.last_change = Some(LastVimChange::DeleteMotion(m_name.to_string()));
+            }
             self.reset_pending();
             return true;
         }
@@ -602,6 +883,62 @@ impl VimState {
 
         let input_char = text.and_then(|t| t.chars().next());
         let ext = json!({"extend": true});
+
+        // Visual leader mappings
+        if !self.pending.is_empty() && self.pending.starts_with("<leader>") {
+            if let Some(c) = input_char {
+                let mut full = self.pending.clone();
+                full.push(c);
+                if let Some(target) = self.config.visual_mappings.get(&full).cloned() {
+                    self.execute_mapping(session, &target);
+                    self.mode = VimMode::Normal;
+                    self.reset_pending();
+                    return true;
+                }
+            }
+            self.reset_pending();
+            return true;
+        }
+
+        if self.pending.is_empty() && let Some(c) = input_char && self.config.leader == c.to_string() {
+            self.pending = "<leader>".to_string();
+            return true;
+        }
+
+        // Visual inline char search: vf., vt)
+        if self.pending.is_empty()
+            && let Some(c) = input_char
+            && matches!(c, 'f' | 'F' | 't' | 'T')
+        {
+            self.pending = c.to_string();
+            return true;
+        }
+
+        if !self.pending.is_empty() && matches!(self.pending.as_str(), "f" | "F" | "t" | "T") {
+            let p = self.pending.clone();
+            if let Some(target) = input_char {
+                let forward = p == "f" || p == "t";
+                let till = p == "t" || p == "T";
+                let find = motion::CharFind { target, forward, till };
+                self.last_char_find = Some(find);
+                motion::execute_char_find(session, find, true);
+            }
+            self.reset_pending();
+            return true;
+        }
+
+        // Surround in visual mode: S{char}
+        if self.pending.is_empty() && input_char == Some('S') {
+            self.pending = "S".to_string();
+            return true;
+        }
+
+        if self.pending == "S" && let Some(delimiter) = input_char {
+            surround::wrap_selection(session, delimiter);
+            self.mode = VimMode::Normal;
+            self.reset_pending();
+            return true;
+        }
 
         // Text object selection while in Visual mode (e.g. `viw`, `va"`)
         if self.pending.is_empty()
@@ -670,6 +1007,49 @@ impl VimState {
             }
             Some('G') => {
                 let _ = session.run("caret.docEnd", &ext);
+                true
+            }
+            Some('J') => {
+                let (start, _) = session.sel.ordered();
+                let p_idx = start.path.0.first().copied().unwrap_or(0) as usize;
+                if p_idx.saturating_add(1) < session.doc.body.len() {
+                    session.doc.body.swap(p_idx, p_idx.saturating_add(1));
+                    let new_p = p_idx.saturating_add(1);
+                    let len = session.doc.para_at(&wordcraft_doc::Pos::body(new_p, 0)).map(|p| p.len()).unwrap_or(0);
+                    session.sel = Selection {
+                        anchor: wordcraft_doc::Pos::body(new_p, 0),
+                        focus: wordcraft_doc::Pos::body(new_p, len),
+                    };
+                    session.relayout();
+                }
+                true
+            }
+            Some('K') => {
+                let (start, _) = session.sel.ordered();
+                let p_idx = start.path.0.first().copied().unwrap_or(0) as usize;
+                if p_idx > 0 {
+                    session.doc.body.swap(p_idx, p_idx.saturating_sub(1));
+                    let new_p = p_idx.saturating_sub(1);
+                    let len = session.doc.para_at(&wordcraft_doc::Pos::body(new_p, 0)).map(|p| p.len()).unwrap_or(0);
+                    session.sel = Selection {
+                        anchor: wordcraft_doc::Pos::body(new_p, 0),
+                        focus: wordcraft_doc::Pos::body(new_p, len),
+                    };
+                    session.relayout();
+                }
+                true
+            }
+            Some(';') => {
+                if let Some(find) = self.last_char_find {
+                    motion::execute_char_find(session, find, true);
+                }
+                true
+            }
+            Some(',') => {
+                if let Some(mut find) = self.last_char_find {
+                    find.forward = !find.forward;
+                    motion::execute_char_find(session, find, true);
+                }
                 true
             }
             Some('y') => {

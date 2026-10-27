@@ -953,7 +953,9 @@ impl WordApp {
         ui.author = self.session.author.clone();
         ui.initials = self.session.initials.clone();
         ui.dictionary = wordcraft_engine::proof::user_dictionary();
-        ui.editing = self.session.prefs.clone();
+        let mut editing = self.session.prefs.clone();
+        editing.vim_mode = self.session.vim.enabled;
+        ui.editing = editing;
         ui.read_aloud_rate = self.session.read_aloud.rate();
         ui.read_aloud_skip_citations = self.session.read_aloud.skip_citations;
         ui.dark_page = self.session.view.dark_mode;
@@ -997,6 +999,10 @@ impl WordApp {
             }
         }
         self.session.prefs = std::mem::take(&mut self.ui.editing);
+        self.session.vim.enabled = self.session.prefs.vim_mode;
+        if self.session.vim.enabled {
+            self.session.vim.mode = wordcraft_engine::VimMode::Normal;
+        }
         // Check spelling as you type follows the saved preference (#1792).
         self.session.view.proofing = self.session.prefs.check_spelling;
         // The saved dictionaries folder (#1063) is searched from the start.

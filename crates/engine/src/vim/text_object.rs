@@ -80,8 +80,15 @@ fn find_word(focus: &Pos, text: &str, off: usize, inner: bool) -> Option<(Pos, P
 fn find_quote(focus: &Pos, text: &str, off: usize, quote: char, inner: bool) -> Option<(Pos, Pos)> {
     let mut indices = Vec::new();
     for (i, c) in text.char_indices() {
-        if c == quote {
-            indices.push(i);
+        let is_match = if quote == '"' {
+            c == '"' || c == '“' || c == '”'
+        } else if quote == '\'' {
+            c == '\'' || c == '‘' || c == '’'
+        } else {
+            c == quote
+        };
+        if is_match {
+            indices.push((i, c.len_utf8()));
         }
     }
 
@@ -91,18 +98,18 @@ fn find_quote(focus: &Pos, text: &str, off: usize, quote: char, inner: bool) -> 
 
     // Find the pair enclosing or surrounding `off`
     for w in indices.windows(2) {
-        let open = w[0];
-        let close = w[1];
+        let (open, open_len) = w[0];
+        let (close, close_len) = w[1];
         if (open <= off && off <= close) || (open > off) {
             return if inner {
-                let s = open + quote.len_utf8();
+                let s = open + open_len;
                 if s <= close {
                     Some((Pos { off: s, ..focus.clone() }, Pos { off: close, ..focus.clone() }))
                 } else {
                     Some((Pos { off: close, ..focus.clone() }, Pos { off: close, ..focus.clone() }))
                 }
             } else {
-                Some((Pos { off: open, ..focus.clone() }, Pos { off: close + quote.len_utf8(), ..focus.clone() }))
+                Some((Pos { off: open, ..focus.clone() }, Pos { off: close + close_len, ..focus.clone() }))
             };
         }
     }
