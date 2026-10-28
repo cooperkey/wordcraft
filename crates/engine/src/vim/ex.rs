@@ -53,6 +53,7 @@ pub struct ExRange {
 }
 
 /// Execute an ex-command line on the given session.
+#[allow(clippy::cognitive_complexity)]
 pub fn execute_ex(session: &mut Session, line: &str) -> ExResult {
     let raw = line.trim_start();
     let without_colon = raw.strip_prefix(':').unwrap_or(raw).trim_start();

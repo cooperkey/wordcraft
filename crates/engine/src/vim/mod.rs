@@ -266,6 +266,7 @@ impl VimState {
         handled
     }
 
+    #[allow(clippy::cognitive_complexity)]
     fn handle_normal(&mut self, session: &mut Session, key_name: &str, text: Option<&str>, ctrl: bool, alt: bool, _shift: bool) -> bool {
         // Escape clears pending sequence, count, operators, and selections
         if key_name == "Escape" {
@@ -1446,6 +1447,7 @@ impl VimState {
         }
     }
 
+    #[allow(clippy::cognitive_complexity)]
     fn handle_operator_pending(&mut self, session: &mut Session, op: VimOp, key_name: &str, input_char: Option<char>) -> bool {
         // Double operator: dd, cc, yy, >>, <<, ==, g~~, guu, gUU, gqq (applies to line)
         let is_double = matches!(
@@ -1869,6 +1871,7 @@ impl VimState {
         }
     }
 
+    #[allow(clippy::cognitive_complexity)]
     fn handle_visual(&mut self, session: &mut Session, key_name: &str, text: Option<&str>, ctrl: bool, _shift: bool) -> bool {
         if key_name == "Escape" {
             self.last_visual_sel = Some(session.sel.clone());
