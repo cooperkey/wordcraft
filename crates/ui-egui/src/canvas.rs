@@ -1865,11 +1865,17 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             };
             if shown && look.opacity > 0.0 {
                 let color = preedit_color.unwrap_or_else(|| caret_color(app));
-                if app.session.vim.enabled && app.session.vim.mode == wordcraft_engine::VimMode::Normal {
+                if app.session.vim.enabled && (app.session.vim.mode == wordcraft_engine::VimMode::Normal || app.session.vim.mode == wordcraft_engine::VimMode::Replace) {
                     let block_w = (c.height * 0.55 * scale).max(8.0);
-                    let block_rect = Rect::from_min_max(pos2(bar[0].x, y0), pos2(bar[0].x + block_w, y1));
-                    let opacity = if since < 530.0 { 0.85 } else { (look.opacity * 0.85).max(0.3) };
-                    painter.rect_filled(block_rect, 0.0, color.gamma_multiply(opacity));
+                    if app.session.vim.mode == wordcraft_engine::VimMode::Replace {
+                        let half_y0 = y1 - (y1 - y0) * 0.25;
+                        let under_rect = Rect::from_min_max(pos2(bar[0].x, half_y0), pos2(bar[0].x + block_w, y1));
+                        painter.rect_filled(under_rect, 0.0, color.gamma_multiply(0.9));
+                    } else {
+                        let block_rect = Rect::from_min_max(pos2(bar[0].x, y0), pos2(bar[0].x + block_w, y1));
+                        let opacity = if since < 530.0 { 0.85 } else { (look.opacity * 0.85).max(0.3) };
+                        painter.rect_filled(block_rect, 0.0, color.gamma_multiply(opacity));
+                    }
                 } else {
                     painter.line_segment(look.bar, Stroke::new(1.5, color.gamma_multiply(look.opacity)));
                 }
