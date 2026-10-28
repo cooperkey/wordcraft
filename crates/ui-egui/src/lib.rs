@@ -2334,6 +2334,12 @@ impl WordApp {
     /// the caption (and as the Recent list, `ensure_recent_fonts`): CJK loads the CJK UI font,
     /// other scripts borrow the document fallback faces. Looked at again only when the names change.
     fn ensure_recover_fonts(&mut self) {
+        if !self.session.has_recovery_documents() {
+            if self.recover_fonts_for.is_some() {
+                self.recover_fonts_for = None;
+            }
+            return;
+        }
         use std::hash::{Hash, Hasher};
         let docs = self.session.recovery_documents();
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
