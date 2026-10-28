@@ -112,7 +112,7 @@ pub fn execute_ex(session: &mut Session, line: &str) -> ExResult {
         // Show clipboard register (system)
         lines.push("--- Registers ---".to_string());
         // Show named registers
-        let mut keys: Vec<char> = vim.registers.keys().copied().collect();
+        let mut keys = vim.registers.keys();
         keys.sort();
         for k in keys {
             if let Some(val) = vim.registers.get(&k) {

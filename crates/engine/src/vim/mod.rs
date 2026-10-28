@@ -9,6 +9,7 @@ pub mod flash;
 pub mod jump_list;
 pub mod macro_rec;
 pub mod motion;
+pub mod registers;
 pub mod repeat;
 pub mod surround;
 pub mod text_object;
@@ -21,6 +22,7 @@ use std::collections::HashMap;
 use crate::{Selection, Session};
 pub use config::VimConfig;
 pub use motion::CharFind;
+pub use registers::{RegType, RegisterBank, RegisterValue};
 pub use repeat::LastVimChange;
 
 /// An operator waiting for a motion or text object (`d`, `c`, `y`, `>`, `<`, `=`, `g~`, `gu`, `gU`, `gq`).
@@ -124,8 +126,8 @@ pub struct VimState {
     pub insert_buf: String,
     /// Active multi-line block edit in progress.
     pub block_edit: Option<BlockEditState>,
-    /// Named registers (a-z, 0-9, +, *, _).
-    pub registers: HashMap<char, String>,
+    /// Complete 39-register subsystem (a-z, A-Z, 0-9, +, *, _, ., :, %, /, =).
+    pub registers: RegisterBank,
     /// Currently selected register prefix (e.g. `"a` sets this to Some('a')).
     pub current_register: Option<char>,
     /// Named marks (a-z) mapping to document positions.
@@ -167,7 +169,7 @@ impl Default for VimState {
             viewport_req: None,
             insert_buf: String::new(),
             block_edit: None,
-            registers: HashMap::new(),
+            registers: RegisterBank::default(),
             current_register: None,
             marks: HashMap::new(),
             last_jump: None,
@@ -364,7 +366,12 @@ impl VimState {
         // Register prefix: "{reg}
         if self.pending == "\"" {
             match input_char {
-                Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '+' | '*' | '_' | '0') => {
+                Some(c)
+                    if c.is_ascii_lowercase()
+                        || c.is_ascii_uppercase()
+                        || c.is_ascii_digit()
+                        || matches!(c, '+' | '*' | '_' | '-' | '.' | ':' | '%' | '/' | '=') =>
+                {
                     self.current_register = Some(c);
                 }
                 _ => {}
@@ -1177,6 +1184,13 @@ impl VimState {
                 true
             }
             Some('x') => {
+                let reg = self.current_register.take();
+                let focus = session.sel.focus.clone();
+                if let Some(para) = session.doc.para_at(&focus) {
+                    let end_off = (focus.off + cnt).min(para.len());
+                    let deleted_str = para.text.get(focus.off..end_off).unwrap_or("").to_string();
+                    self.registers.record_delete(reg, deleted_str, RegType::Charwise);
+                }
                 repeat(cnt, || session.run("text.delete", &json!({})));
                 self.last_change = Some(LastVimChange::DeleteChar);
                 true
@@ -1186,38 +1200,15 @@ impl VimState {
                 true
             }
             Some('p') => {
-                if let Some(r) = self.current_register.take() {
-                    if r == '_' {
-                        // Black hole: do nothing
-                    } else if let Some(val) = self.registers.get(&r).cloned() {
-                        let _ = session.run("text.insert", &json!({"text": val}));
-                        self.last_change = Some(LastVimChange::Paste);
-                    } else {
-                        let _ = session.run("edit.paste", &json!({}));
-                        self.last_change = Some(LastVimChange::Paste);
-                    }
-                } else {
-                    let _ = session.run("edit.paste", &json!({}));
-                    self.last_change = Some(LastVimChange::Paste);
-                }
+                let reg = self.current_register.take();
+                self.registers.paste(session, reg, false, cnt);
+                self.last_change = Some(LastVimChange::Paste);
                 true
             }
             Some('P') => {
-                let _ = session.run("caret.left", &json!({}));
-                if let Some(r) = self.current_register.take() {
-                    if r == '_' {
-                        // Black hole: do nothing
-                    } else if let Some(val) = self.registers.get(&r).cloned() {
-                        let _ = session.run("text.insert", &json!({"text": val}));
-                        self.last_change = Some(LastVimChange::Paste);
-                    } else {
-                        let _ = session.run("edit.paste", &json!({}));
-                        self.last_change = Some(LastVimChange::Paste);
-                    }
-                } else {
-                    let _ = session.run("edit.paste", &json!({}));
-                    self.last_change = Some(LastVimChange::Paste);
-                }
+                let reg = self.current_register.take();
+                self.registers.paste(session, reg, true, cnt);
+                self.last_change = Some(LastVimChange::Paste);
                 true
             }
             Some('i') => {
@@ -1512,7 +1503,7 @@ impl VimState {
             let cnt = self.op_count.take().unwrap_or(1).saturating_mul(self.take_count());
             for _ in 0..cnt {
                 let _ = session.run("select.line", &json!({}));
-                self.apply_operator_to_selection(session, op);
+                self.apply_operator_internal(session, op, true);
                 match op {
                     VimOp::Delete => self.last_change = Some(LastVimChange::DeleteLine),
                     VimOp::ShiftRight => self.last_change = Some(LastVimChange::Indent),
@@ -1852,37 +1843,40 @@ impl VimState {
     }
 
     fn apply_operator_to_selection(&mut self, session: &mut Session, op: VimOp) {
+        self.apply_operator_internal(session, op, false);
+    }
+
+    fn apply_operator_internal(&mut self, session: &mut Session, op: VimOp, force_linewise: bool) {
         let reg = self.current_register.take();
         let selected_text = session.selected_text();
-        if let Some(r) = reg {
-            if r == '_' {
-                // Black hole register: don't copy to clipboard or registers
-                if op == VimOp::Delete || op == VimOp::Change {
-                    let _ = session.run("text.delete", &json!({}));
-                    if op == VimOp::Change {
-                        self.mode = VimMode::Insert;
-                    }
-                } else {
-                    let _ = session.run("select.collapse", &json!({}));
+        let is_linewise = force_linewise || self.mode == VimMode::VisualLine || selected_text.ends_with('\n');
+        let reg_type = if is_linewise { RegType::Linewise } else { RegType::Charwise };
+
+        if reg == Some('_') {
+            // Black hole register: don't copy to clipboard or registers
+            if op == VimOp::Delete || op == VimOp::Change {
+                let _ = session.run("text.delete", &json!({}));
+                if op == VimOp::Change {
+                    self.mode = VimMode::Insert;
                 }
-                return;
+            } else {
+                let _ = session.run("select.collapse", &json!({}));
             }
-            if r.is_ascii_lowercase() || r.is_ascii_digit() {
-                self.registers.insert(r, selected_text.clone());
-            }
+            return;
         }
-        if op == VimOp::Yank {
-            self.registers.insert('0', selected_text);
-        }
+
         match op {
             VimOp::Delete => {
+                self.registers.record_delete(reg, selected_text, reg_type);
                 let _ = session.run("edit.cut", &json!({}));
             }
             VimOp::Change => {
+                self.registers.record_delete(reg, selected_text, reg_type);
                 let _ = session.run("edit.cut", &json!({}));
                 self.mode = VimMode::Insert;
             }
             VimOp::Yank => {
+                self.registers.record_yank(reg, selected_text, reg_type);
                 let _ = session.run("edit.copy", &json!({}));
                 let _ = session.run("select.collapse", &json!({}));
             }
@@ -2305,17 +2299,9 @@ impl VimState {
                 true
             }
             Some('p') => {
-                if let Some(r) = self.current_register.take() {
-                    if r == '_' {
-                        // Black hole: do nothing
-                    } else if let Some(val) = self.registers.get(&r).cloned() {
-                        let _ = session.run("text.insert", &json!({"text": val}));
-                    } else {
-                        let _ = session.run("edit.paste", &json!({}));
-                    }
-                } else {
-                    let _ = session.run("edit.paste", &json!({}));
-                }
+                let reg = self.current_register.take();
+                let _ = session.run("text.delete", &json!({}));
+                self.registers.paste(session, reg, true, 1);
                 self.mode = VimMode::Normal;
                 true
             }

@@ -1032,3 +1032,67 @@ fn vim_operators_shift_case_and_open() {
     assert!(s.handle_vim_key("Escape", None, false, false, false));
     assert_eq!(s.vim.mode, VimMode::Normal);
 }
+
+#[test]
+fn vim_text_objects_extended() {
+    // 1. diW on whitespace-delimited WORD
+    let mut s = new_session("foo foo.bar.baz baz");
+    s.sel = Selection::caret(Pos::body(0, 6)); // in "foo.bar.baz"
+    assert!(s.handle_vim_key("D", Some("d"), false, false, false));
+    assert!(s.handle_vim_key("I", Some("i"), false, false, false));
+    assert!(s.handle_vim_key("W", Some("W"), false, false, true));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "foo  baz");
+
+    // 2. Forward scan for quotes: di" from outside quotes
+    let mut s2 = new_session("hello \"world\" test");
+    s2.sel = Selection::caret(Pos::body(0, 0)); // at 'h', outside quotes
+    assert!(s2.handle_vim_key("D", Some("d"), false, false, false));
+    assert!(s2.handle_vim_key("I", Some("i"), false, false, false));
+    assert!(s2.handle_vim_key("\"", Some("\""), false, false, false));
+    assert_eq!(s2.doc.para_at(&Pos::body(0, 0)).unwrap().text, "hello \"\" test");
+
+    // 3. HTML/XML tags: dit and dat
+    let mut s3 = new_session("<div class=\"box\">content here</div>");
+    s3.sel = Selection::caret(Pos::body(0, 20)); // in "content here"
+    assert!(s3.handle_vim_key("D", Some("d"), false, false, false));
+    assert!(s3.handle_vim_key("I", Some("i"), false, false, false));
+    assert!(s3.handle_vim_key("T", Some("t"), false, false, false));
+    assert_eq!(s3.doc.para_at(&Pos::body(0, 0)).unwrap().text, "<div class=\"box\"></div>");
+}
+
+#[test]
+fn vim_registers_linewise_and_append() {
+    // 1. Linewise yank & paste
+    let mut s = new_session("Line One\nLine Two");
+    s.sel = Selection::caret(Pos::body(0, 2));
+
+    // 'yy' yanks entire Line One
+    assert!(s.handle_vim_key("Y", Some("y"), false, false, false));
+    assert!(s.handle_vim_key("Y", Some("y"), false, false, false));
+
+    // 'p' pastes on a new line below
+    assert!(s.handle_vim_key("P", Some("p"), false, false, false));
+    assert_eq!(s.doc.body.len(), 3);
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).unwrap().text, "Line One");
+
+    // 2. Register append with uppercase: "ayw then "Ayw
+    let mut s2 = new_session("alpha beta gamma");
+    s2.sel = Selection::caret(Pos::body(0, 0));
+
+    // "ayw yanks "alpha " into register 'a'
+    assert!(s2.handle_vim_key("\"", Some("\""), false, false, false));
+    assert!(s2.handle_vim_key("A", Some("a"), false, false, false));
+    assert!(s2.handle_vim_key("Y", Some("y"), false, false, false));
+    assert!(s2.handle_vim_key("W", Some("w"), false, false, false));
+    assert_eq!(s2.vim.registers.get(&'a').map(String::as_str), Some("alpha "));
+
+    // Move to "beta "
+    s2.sel = Selection::caret(Pos::body(0, 6));
+
+    // "Ayw appends "beta " into register 'a'
+    assert!(s2.handle_vim_key("\"", Some("\""), false, false, false));
+    assert!(s2.handle_vim_key("A", Some("A"), false, false, true));
+    assert!(s2.handle_vim_key("Y", Some("y"), false, false, false));
+    assert!(s2.handle_vim_key("W", Some("w"), false, false, false));
+    assert_eq!(s2.vim.registers.get(&'a').map(String::as_str), Some("alpha beta "));
+}
