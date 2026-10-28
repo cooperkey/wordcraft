@@ -2,15 +2,12 @@
 
 use serde_json::{Value, json};
 
-use crate::{CmdError, CmdResult, CommandSpec, Session, p};
 use crate::vim::VimMode;
+use crate::{CmdError, CmdResult, CommandSpec, Session, p};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("vim.toggle", "Toggle Vim Mode", "Tools › Vim Mode", toggle)
-            .key("Mod+Alt+V")
-            .params(r#"{"value"?: bool}"#)
-            .pure(),
+        CommandSpec::new("vim.toggle", "Toggle Vim Mode", "Tools › Vim Mode", toggle).key("Mod+Alt+V").params(r#"{"value"?: bool}"#).pure(),
         CommandSpec::new("vim.setMode", "Set Vim Mode", "Tools › Vim Mode", set_mode)
             .params(r#"{"mode": "normal" | "insert" | "visual" | "visualLine"}"#)
             .pure(),
@@ -33,6 +30,7 @@ fn toggle(s: &mut Session, v: &Value) -> CmdResult {
             VimMode::Insert => "insert",
             VimMode::Visual => "visual",
             VimMode::VisualLine => "visualLine",
+            VimMode::VisualBlock => "visualBlock",
             VimMode::Command => "command",
         }
     }))
@@ -45,6 +43,7 @@ fn set_mode(s: &mut Session, v: &Value) -> CmdResult {
         "insert" => VimMode::Insert,
         "visual" => VimMode::Visual,
         "visualLine" => VimMode::VisualLine,
+        "visualBlock" => VimMode::VisualBlock,
         "command" => VimMode::Command,
         _ => return Err(CmdError::Params(format!("unknown mode '{mode_str}'"))),
     };

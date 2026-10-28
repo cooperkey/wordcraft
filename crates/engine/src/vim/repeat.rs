@@ -1,11 +1,11 @@
 //! Implementation of Vim's dot repeat (`.`) command.
 
+use super::motion::{CharFind, execute_char_find};
+use super::surround::{change_surround, delete_surround, wrap_selection};
+use super::text_object::find_text_object;
+use crate::Session;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use crate::Session;
-use super::motion::{CharFind, execute_char_find};
-use super::text_object::find_text_object;
-use super::surround::{change_surround, delete_surround, wrap_selection};
 
 /// A recorded modifying edit that can be repeated with `.`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,10 +21,7 @@ pub enum LastVimChange {
     /// Delete inline character find (e.g. `df.`, `dt)`).
     DeleteCharFind(CharFind),
     /// Change with inserted text (e.g. `cw` or `ci"` + text + Esc).
-    Change {
-        target: String,
-        text: String,
-    },
+    Change { target: String, text: String },
     /// Paste clipboard (`p`).
     Paste,
     /// Wrap selection / text object with delimiter (`ys{obj}{char}`).
@@ -39,6 +36,18 @@ pub enum LastVimChange {
     Outdent,
     /// Join line below (`J`).
     Join,
+    /// Replace character under caret (`r{char}`).
+    ReplaceChar(char),
+    /// Toggle case of character under caret (`~`).
+    ToggleCase,
+    /// Change from cursor to end of line (`C`), inserting text.
+    ChangeToEnd { text: String },
+    /// Delete from cursor to end of line (`D`).
+    DeleteToEnd,
+    /// Substitute entire line (`S`), inserting text.
+    SubstituteLine { text: String },
+    /// Delete character before caret (`X`).
+    DeleteCharBefore,
 }
 
 impl LastVimChange {
@@ -110,6 +119,57 @@ impl LastVimChange {
             }
             Self::Join => {
                 let _ = session.run("caret.end", &json!({}));
+                let _ = session.run("text.delete", &json!({}));
+                true
+            }
+            Self::ReplaceChar(ch) => {
+                let _ = session.run("text.delete", &json!({}));
+                let _ = session.run("text.insert", &json!({"text": ch.to_string()}));
+                let _ = session.run("caret.left", &json!({}));
+                true
+            }
+            Self::ToggleCase => {
+                // Read char at cursor, toggle case, replace it, move right.
+                let pos = &session.sel.focus;
+                let toggled = session
+                    .doc
+                    .para_at(pos)
+                    .and_then(|p| p.text.get(pos.off..).and_then(|s| s.chars().next()))
+                    .map(|c| if c.is_uppercase() { c.to_lowercase().next().unwrap_or(c) } else { c.to_uppercase().next().unwrap_or(c) });
+                if let Some(ch) = toggled {
+                    let _ = session.run("text.delete", &json!({}));
+                    let _ = session.run("text.insert", &json!({"text": ch.to_string()}));
+                    // text.insert leaves caret after the char, which is the "move right" behavior
+                    true
+                } else {
+                    false
+                }
+            }
+            Self::ChangeToEnd { text } => {
+                let ext = json!({"extend": true});
+                let _ = session.run("caret.end", &ext);
+                let _ = session.run("edit.cut", &json!({}));
+                if !text.is_empty() {
+                    let _ = session.run("text.insert", &json!({"text": text}));
+                }
+                true
+            }
+            Self::DeleteToEnd => {
+                let ext = json!({"extend": true});
+                let _ = session.run("caret.end", &ext);
+                let _ = session.run("edit.cut", &json!({}));
+                true
+            }
+            Self::SubstituteLine { text } => {
+                let _ = session.run("select.line", &json!({}));
+                let _ = session.run("edit.cut", &json!({}));
+                if !text.is_empty() {
+                    let _ = session.run("text.insert", &json!({"text": text}));
+                }
+                true
+            }
+            Self::DeleteCharBefore => {
+                let _ = session.run("caret.left", &json!({}));
                 let _ = session.run("text.delete", &json!({}));
                 true
             }

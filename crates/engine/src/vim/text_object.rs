@@ -2,8 +2,8 @@
 //!
 //! Supports `iw`, `aw`, `i"`, `a"`, `i'`, `a'`, `i(`, `a(`, `i[`, `a[`, `i{`, `a{`, `ip`, `ap`.
 
-use wordcraft_doc::Pos;
 use crate::Session;
+use wordcraft_doc::Pos;
 
 /// Locate the range of a text object around the current caret position.
 /// Returns (start, end) positions if a matching text object is found.
@@ -16,6 +16,9 @@ pub fn find_text_object(session: &Session, target: char, inner: bool) -> Option<
     match target {
         'w' => find_word(focus, text, off, inner),
         '"' | '\'' | '`' => find_quote(focus, text, off, target, inner),
+        'q' => find_quote(focus, text, off, '"', inner)
+            .or_else(|| find_quote(focus, text, off, '\'', inner))
+            .or_else(|| find_quote(focus, text, off, '`', inner)),
         '(' | ')' | 'b' => find_pair(focus, text, off, '(', ')', inner),
         '[' | ']' => find_pair(focus, text, off, '[', ']', inner),
         '{' | '}' | 'B' => find_pair(focus, text, off, '{', '}', inner),
@@ -173,7 +176,9 @@ fn find_paragraph(session: &Session, focus: &Pos, inner: bool) -> Option<(Pos, P
     if inner {
         Some((start, Pos { off: para.len(), ..focus.clone() }))
     } else {
-        let next_start = session.doc.next_para(focus.story, &focus.path)
+        let next_start = session
+            .doc
+            .next_para(focus.story, &focus.path)
             .filter(|q| q.parent() == focus.path.parent())
             .map(|q| Pos { story: focus.story, path: q, off: 0 })
             .unwrap_or_else(|| Pos { off: para.len(), ..focus.clone() });

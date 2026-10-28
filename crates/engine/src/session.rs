@@ -1991,14 +1991,7 @@ impl Session {
     }
 
     /// Process a keystroke through the Vim modal state machine.
-    pub fn handle_vim_key(
-        &mut self,
-        key_name: &str,
-        text: Option<&str>,
-        ctrl: bool,
-        alt: bool,
-        shift: bool,
-    ) -> bool {
+    pub fn handle_vim_key(&mut self, key_name: &str, text: Option<&str>, ctrl: bool, alt: bool, shift: bool) -> bool {
         let mut vim = std::mem::take(&mut self.vim);
         let handled = vim.handle_key(self, key_name, text, ctrl, alt, shift);
         self.vim = vim;

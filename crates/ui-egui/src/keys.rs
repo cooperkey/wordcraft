@@ -547,11 +547,47 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
         }
         match e {
             egui::Event::Text(t) => {
+                if app.canvas.swallow_text {
+                    app.canvas.swallow_text = false;
+                    continue;
+                }
                 if app.session.vim.enabled {
+                    if app.session.vim.unicode_hex_layer.is_some() {
+                        let handled = app.session.handle_vim_key("Text", Some(&t), false, false, false);
+                        if handled {
+                            ctx.request_repaint();
+                            continue;
+                        }
+                    }
                     if app.session.vim.mode == wordcraft_engine::VimMode::Command {
                         app.session.vim.cmd_input.push_str(&t);
                         continue;
-                    } else if app.session.vim.mode != wordcraft_engine::VimMode::Insert {
+                    } else if app.session.vim.mode == wordcraft_engine::VimMode::Insert {
+                        app.session.vim.insert_buf.push_str(&t);
+                    } else {
+                        // In Normal / Visual / VisualBlock modes, held keys arrive as repeated Event::Text.
+                        for c in t.chars() {
+                            let key_name = match c {
+                                'h' => "H",
+                                'j' => "J",
+                                'k' => "K",
+                                'l' => "L",
+                                'w' => "W",
+                                'b' => "B",
+                                'e' => "E",
+                                '0' => "0",
+                                '$' => "$",
+                                '^' => "^",
+                                'x' => "X",
+                                _ => "Text",
+                            };
+                            let handled = app.session.handle_vim_key(key_name, Some(&c.to_string()), false, false, c.is_uppercase());
+                            if handled {
+                                app.canvas.scroll_to_caret = true;
+                                app.canvas.caret_visible_since = crate::now_ms();
+                                ctx.request_repaint();
+                            }
+                        }
                         continue;
                     }
                 }
@@ -698,6 +734,32 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                     if key == Key::Escape || ((modifiers.ctrl || modifiers.command) && key == Key::OpenBracket) {
                         let _ = app.session.handle_vim_key("Escape", None, false, false, false);
                         app.canvas.swallow_text = true;
+                        app.canvas.caret_visible_since = crate::now_ms();
+                        continue;
+                    }
+                    if modifiers.ctrl && key == Key::V {
+                        let handled = app.session.handle_vim_key("V", None, true, false, false);
+                        app.canvas.swallow_text = true;
+                        if handled {
+                            app.canvas.scroll_to_caret = true;
+                            app.canvas.caret_visible_since = crate::now_ms();
+                            ctx.request_repaint();
+                            continue;
+                        }
+                    }
+                    if modifiers.ctrl && key == Key::Q {
+                        let handled = app.session.handle_vim_key("Q", None, true, false, false);
+                        app.canvas.swallow_text = true;
+                        if handled {
+                            ctx.request_repaint();
+                            continue;
+                        }
+                    }
+                    if app.session.vim.unicode_hex_layer.is_some() && (key == Key::Enter || key == Key::Backspace || key == Key::Escape) {
+                        let name = key_name(key).unwrap_or("");
+                        let _ = app.session.handle_vim_key(name, None, modifiers.ctrl, modifiers.alt, modifiers.shift);
+                        app.canvas.swallow_text = true;
+                        ctx.request_repaint();
                         continue;
                     }
                     if app.session.vim.mode == wordcraft_engine::VimMode::Command {
@@ -707,7 +769,7 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                             app.canvas.swallow_text = true;
                             continue;
                         }
-                    } else if app.session.vim.mode != wordcraft_engine::VimMode::Insert && !modifiers.command {
+                    } else if app.session.vim.mode != wordcraft_engine::VimMode::Insert {
                         let name = key_name(key).unwrap_or("");
                         let text = match key {
                             Key::A => Some(if modifiers.shift { "A" } else { "a" }),
@@ -762,16 +824,12 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                             _ => None,
                         };
                         let ctrl = modifiers.ctrl || (cfg!(target_os = "macos") && modifiers.command);
-                        let handled = app.session.handle_vim_key(
-                            name,
-                            text,
-                            ctrl,
-                            modifiers.alt,
-                            modifiers.shift,
-                        );
+                        let handled = app.session.handle_vim_key(name, text, ctrl, modifiers.alt, modifiers.shift);
                         app.canvas.swallow_text = true;
                         if handled {
                             app.canvas.scroll_to_caret = true;
+                            app.canvas.caret_visible_since = crate::now_ms();
+                            ctx.request_repaint();
                             continue;
                         }
                     }
@@ -791,6 +849,9 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
 /// the document (`canvas`) a selection, which Escape collapses first (`select.collapse`), as in a
 /// normal window.
 fn leave_full_screen(app: &mut WordApp, ctx: &egui::Context, key: Key, m: Modifiers, canvas: bool) -> bool {
+    if app.session.vim.enabled {
+        return false;
+    }
     let screen = crate::chrome::Screen::of(&app.session.view).exit_command();
     let Some(id) = screen.or(app.session.view.full_screen.then_some("view.fullScreen")) else { return false };
     if key != Key::Escape || !m.is_none() || !app.escape_free {

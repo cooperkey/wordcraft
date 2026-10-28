@@ -486,3 +486,549 @@ fn vim_viewport_centering_keys() {
     assert!(s.handle_vim_key("B", Some("b"), false, false, false));
     assert_eq!(s.vim.viewport_req, Some("bottom"));
 }
+
+#[test]
+fn vim_visual_colon_prepopulate() {
+    let mut s = new_session("Sample line 1\nSample line 2");
+    s.sel = Selection::caret(Pos::body(0, 0));
+
+    // 'v' enters Visual mode
+    assert!(s.handle_vim_key("V", Some("v"), false, false, false));
+    assert_eq!(s.vim.mode, VimMode::Visual);
+
+    // ':' transitions to Command mode and pre-populates :'<,'>
+    assert!(s.handle_vim_key("Colon", Some(":"), false, false, false));
+    assert_eq!(s.vim.mode, VimMode::Command);
+    assert_eq!(s.vim.cmd_input, ":'<,'>");
+}
+
+#[test]
+fn vim_ex_visual_range_substitution() {
+    let mut s = new_session("apple pie\napple tart\napple cake");
+    // Select lines 0 and 1
+    s.sel = Selection { anchor: Pos::body(0, 0), focus: Pos::body(1, 10) };
+
+    let res = crate::vim::ex::execute_ex(&mut s, ":'<,'>s/apple/cherry/g");
+    assert!(!res.is_error);
+    assert!(res.message.contains("2 substitutions"));
+
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "cherry pie");
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).unwrap().text, "cherry tart");
+    // Line 2 was outside selection, remains unchanged
+    assert_eq!(s.doc.para_at(&Pos::body(2, 0)).unwrap().text, "apple cake");
+}
+
+#[test]
+fn vim_visual_block_selection_and_delete() {
+    let mut s = new_session("123abc\n123def\n123ghi");
+    s.sel = Selection::caret(Pos::body(0, 0));
+
+    // Ctrl+V enters VisualBlock mode
+    assert!(s.handle_vim_key("V", None, true, false, false));
+    assert_eq!(s.vim.mode, VimMode::VisualBlock);
+
+    // Move 3 chars right and 2 lines down to select the 3-char wide block
+    assert!(s.handle_vim_key("L", Some("l"), false, false, false));
+    assert!(s.handle_vim_key("L", Some("l"), false, false, false));
+    assert!(s.handle_vim_key("L", Some("l"), false, false, false));
+    assert!(s.handle_vim_key("J", Some("j"), false, false, false));
+    assert!(s.handle_vim_key("J", Some("j"), false, false, false));
+
+    // 'd' deletes the block
+    assert!(s.handle_vim_key("D", Some("d"), false, false, false));
+    assert_eq!(s.vim.mode, VimMode::Normal);
+
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "abc");
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).unwrap().text, "def");
+    assert_eq!(s.doc.para_at(&Pos::body(2, 0)).unwrap().text, "ghi");
+}
+
+#[test]
+fn vim_visual_block_insert_replicate() {
+    let mut s = new_session("one\ntwo\nthree");
+    s.sel = Selection::caret(Pos::body(0, 0));
+
+    // Ctrl+V enters VisualBlock mode
+    assert!(s.handle_vim_key("V", None, true, false, false));
+    assert_eq!(s.vim.mode, VimMode::VisualBlock);
+
+    // Select across 3 lines
+    assert!(s.handle_vim_key("J", Some("j"), false, false, false));
+    assert!(s.handle_vim_key("J", Some("j"), false, false, false));
+
+    // 'I' enters Insert mode with block_edit queued
+    assert!(s.handle_vim_key("I", Some("I"), false, false, true));
+    assert_eq!(s.vim.mode, VimMode::Insert);
+    assert!(s.vim.block_edit.is_some());
+
+    // Type "// "
+    s.vim.insert_buf.push_str("// ");
+    let _ = s.run("text.insert", &json!({"text": "// "}));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "// One");
+
+    // Escape exits Insert mode and replicates to other lines
+    assert!(s.handle_vim_key("Escape", None, false, false, false));
+    assert_eq!(s.vim.mode, VimMode::Normal);
+
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "// One");
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).unwrap().text, "// Two");
+    assert_eq!(s.doc.para_at(&Pos::body(2, 0)).unwrap().text, "// three");
+}
+
+#[test]
+fn vim_visual_block_append_replicate() {
+    let mut s = new_session("item1\nitem2\nitem3");
+    s.sel = Selection::caret(Pos::body(0, 5));
+
+    // Ctrl+V enters VisualBlock mode
+    assert!(s.handle_vim_key("V", None, true, false, false));
+    assert_eq!(s.vim.mode, VimMode::VisualBlock);
+
+    // Select across 3 lines
+    assert!(s.handle_vim_key("J", Some("j"), false, false, false));
+    assert!(s.handle_vim_key("J", Some("j"), false, false, false));
+
+    // 'A' enters Insert mode to append
+    assert!(s.handle_vim_key("A", Some("A"), false, false, true));
+    assert_eq!(s.vim.mode, VimMode::Insert);
+    assert!(s.vim.block_edit.is_some());
+
+    // Type ";"
+    s.vim.insert_buf.push_str(";");
+    let _ = s.run("text.insert", &json!({"text": ";"}));
+
+    // Escape replicates across the lines
+    assert!(s.handle_vim_key("Escape", None, false, false, false));
+    assert_eq!(s.vim.mode, VimMode::Normal);
+
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "item1;");
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).unwrap().text, "item2;");
+    assert_eq!(s.doc.para_at(&Pos::body(2, 0)).unwrap().text, "item3;");
+}
+
+#[test]
+fn vim_operator_count_motion_d3w() {
+    let mut s = new_session("one two three four five");
+    s.sel = Selection::caret(Pos::body(0, 0));
+
+    // 'd' then '3' then 'w'
+    assert!(s.handle_vim_key("D", Some("d"), false, false, false));
+    assert_eq!(s.vim.pending_op, Some(crate::vim::VimOp::Delete));
+    assert!(s.handle_vim_key("3", Some("3"), false, false, false));
+    assert_eq!(s.vim.count, Some(3));
+    assert!(s.handle_vim_key("W", Some("w"), false, false, false));
+
+    // Deletes "one two three " leaving "four five"
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "four five");
+}
+
+#[test]
+fn vim_replace_char_r_and_repeat() {
+    let mut s = new_session("apple");
+    s.sel = Selection::caret(Pos::body(0, 0));
+
+    // 'r' then 'o' replaces 'a' with 'o' -> "opple"
+    assert!(s.handle_vim_key("R", Some("r"), false, false, false));
+    assert!(s.vim.replace_char_pending);
+    assert!(s.handle_vim_key("O", Some("o"), false, false, false));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "opple");
+
+    // Move right and press '.' to repeat replace with 'o'
+    assert!(s.handle_vim_key("L", Some("l"), false, false, false));
+    assert!(s.handle_vim_key(".", Some("."), false, false, false));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "oople");
+}
+
+#[test]
+fn vim_toggle_case_tilde() {
+    let mut s = new_session("hELLO");
+    s.sel = Selection::caret(Pos::body(0, 0));
+
+    // '~' toggles 'h' to 'H'
+    assert!(s.handle_vim_key("~", Some("~"), false, false, false));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "HELLO");
+}
+
+#[test]
+fn vim_line_end_operations_c_d_y() {
+    let mut s = new_session("hello world");
+    s.sel = Selection::caret(Pos::body(0, 5)); // space
+
+    // 'D' deletes to end of line
+    assert!(s.handle_vim_key("D", Some("D"), false, false, true));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "hello");
+
+    // 'C' changes to end of line
+    s.sel = Selection::caret(Pos::body(0, 2));
+    assert!(s.handle_vim_key("C", Some("C"), false, false, true));
+    assert_eq!(s.vim.mode, VimMode::Insert);
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "he");
+    assert!(s.handle_vim_key("Escape", None, false, false, false));
+}
+
+#[test]
+fn vim_substitute_line_s() {
+    let mut s = new_session("hello world");
+    s.sel = Selection::caret(Pos::body(0, 2));
+
+    // 'S' clears line and enters insert mode
+    assert!(s.handle_vim_key("S", Some("S"), false, false, true));
+    assert_eq!(s.vim.mode, VimMode::Insert);
+    assert!(s.handle_vim_key("Escape", None, false, false, false));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "");
+}
+
+#[test]
+fn vim_delete_char_before_x() {
+    let mut s = new_session("hello");
+    s.sel = Selection::caret(Pos::body(0, 4));
+
+    // 'X' deletes char before cursor ('l')
+    assert!(s.handle_vim_key("X", Some("X"), false, false, true));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "helo");
+}
+
+#[test]
+fn vim_registers_named_and_black_hole() {
+    let mut s = new_session("first second third");
+    s.sel = Selection::caret(Pos::body(0, 0));
+
+    // "ayw yanks "first " into register 'a'
+    assert!(s.handle_vim_key("\"", Some("\""), false, false, false));
+    assert!(s.handle_vim_key("A", Some("a"), false, false, false));
+    assert_eq!(s.vim.current_register, Some('a'));
+    assert!(s.handle_vim_key("Y", Some("y"), false, false, false));
+    assert!(s.handle_vim_key("W", Some("w"), false, false, false));
+    assert_eq!(s.vim.registers.get(&'a').map(String::as_str), Some("first "));
+
+    // "_dw deletes "first " into black hole register (caret is at 0, 0)
+    assert!(s.handle_vim_key("\"", Some("\""), false, false, false));
+    assert!(s.handle_vim_key("_", Some("_"), false, false, false));
+    assert_eq!(s.vim.current_register, Some('_'));
+    assert!(s.handle_vim_key("D", Some("d"), false, false, false));
+    assert!(s.handle_vim_key("W", Some("w"), false, false, false));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "second third");
+
+    // "ap pastes "first " from register 'a'
+    assert!(s.handle_vim_key("\"", Some("\""), false, false, false));
+    assert!(s.handle_vim_key("A", Some("a"), false, false, false));
+    assert!(s.handle_vim_key("P", Some("p"), false, false, false));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "first second third");
+}
+
+#[test]
+fn vim_marks_and_jumps() {
+    let mut s = new_session("line zero\nline one\nline two");
+    s.sel = Selection::caret(Pos::body(1, 5));
+
+    // 'ma' marks mark 'a' at (1, 5)
+    assert!(s.handle_vim_key("M", Some("m"), false, false, false));
+    assert!(s.handle_vim_key("A", Some("a"), false, false, false));
+    assert_eq!(s.vim.marks.get(&'a').unwrap().path, Path::top(1));
+    assert_eq!(s.vim.marks.get(&'a').unwrap().off, 5);
+
+    // Move to (0, 0)
+    s.sel = Selection::caret(Pos::body(0, 0));
+
+    // '`a' jumps to exact position (1, 5)
+    assert!(s.handle_vim_key("`", Some("`"), false, false, false));
+    assert!(s.handle_vim_key("A", Some("a"), false, false, false));
+    assert_eq!(s.sel.focus.path, Path::top(1));
+    assert_eq!(s.sel.focus.off, 5);
+
+    // '' jumps back to previous jump location (0, 0)
+    assert!(s.handle_vim_key("'", Some("'"), false, false, false));
+    assert!(s.handle_vim_key("'", Some("'"), false, false, false));
+    assert_eq!(s.sel.focus.path, Path::top(0));
+}
+
+#[test]
+fn vim_visual_swap_cursor_o() {
+    let mut s = new_session("hello world");
+    s.sel = Selection { anchor: Pos::body(0, 0), focus: Pos::body(0, 5) };
+    s.vim.mode = VimMode::Visual;
+
+    // 'o' swaps anchor and focus
+    assert!(s.handle_vim_key("O", Some("o"), false, false, false));
+    assert_eq!(s.sel.anchor, Pos::body(0, 5));
+    assert_eq!(s.sel.focus, Pos::body(0, 0));
+}
+
+#[test]
+fn vim_visual_case_conversion_u_and_u() {
+    let mut s = new_session("Hello World");
+    s.sel = Selection { anchor: Pos::body(0, 0), focus: Pos::body(0, 5) };
+    s.vim.mode = VimMode::Visual;
+
+    // 'u' lowercases selection
+    assert!(s.handle_vim_key("U", Some("u"), false, false, false));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "hello World");
+
+    // 'U' uppercases selection
+    s.sel = Selection { anchor: Pos::body(0, 6), focus: Pos::body(0, 11) };
+    s.vim.mode = VimMode::Visual;
+    assert!(s.handle_vim_key("U", Some("U"), false, false, true));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "hello WORLD");
+}
+
+#[test]
+fn vim_bracket_match_percent() {
+    let mut s = new_session("fn foo(a: i32, b: i32) { bar(); }");
+    s.sel = Selection::caret(Pos::body(0, 6)); // '('
+
+    // '%' jumps to ')'
+    assert!(s.handle_vim_key("%", Some("%"), false, false, false));
+    assert_eq!(s.sel.focus.off, 21); // ')'
+
+    // '%' jumps back to '('
+    assert!(s.handle_vim_key("%", Some("%"), false, false, false));
+    assert_eq!(s.sel.focus.off, 6);
+}
+
+#[test]
+fn vim_unicode_hex_layer_input() {
+    let mut s = new_session("text ");
+    s.sel = Selection::caret(Pos::body(0, 5));
+
+    // Ctrl+Q opens unicode layer
+    assert!(s.handle_vim_key("Q", None, true, false, false));
+    assert!(s.vim.unicode_hex_layer.is_some());
+
+    // Type 2, 0, 1, 4 (em-dash —)
+    assert!(s.handle_vim_key("2", Some("2"), false, false, false));
+    assert!(s.handle_vim_key("0", Some("0"), false, false, false));
+    assert!(s.handle_vim_key("1", Some("1"), false, false, false));
+    assert!(s.handle_vim_key("4", Some("4"), false, false, false));
+
+    // Automatically inserts '—' on 4th hex digit
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "text —");
+    assert!(s.vim.unicode_hex_layer.is_none());
+}
+
+#[test]
+fn vim_markdown_checkbox_toggle() {
+    let mut s = new_session("buy milk");
+    s.sel = Selection::caret(Pos::body(0, 0));
+
+    // <leader>x adds "- [ ] "
+    assert!(s.handle_vim_key("Space", Some(" "), false, false, false));
+    assert!(s.handle_vim_key("X", Some("x"), false, false, false));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "- [ ] buy milk");
+
+    // <leader>x toggles to "- [x] "
+    assert!(s.handle_vim_key("Space", Some(" "), false, false, false));
+    assert!(s.handle_vim_key("X", Some("x"), false, false, false));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "- [x] buy milk");
+
+    // <leader>x toggles back to "- [ ] "
+    assert!(s.handle_vim_key("Space", Some(" "), false, false, false));
+    assert!(s.handle_vim_key("X", Some("x"), false, false, false));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "- [ ] buy milk");
+}
+
+#[test]
+fn vim_align_equal_signs() {
+    let mut s = new_session("a = 1\nlong_name = 2\nc = 3");
+    s.sel = Selection::caret(Pos::body(0, 0));
+
+    // <leader>r= aligns equal signs
+    assert!(s.handle_vim_key("Space", Some(" "), false, false, false));
+    assert!(s.handle_vim_key("R", Some("r"), false, false, false));
+    assert!(s.handle_vim_key("=", Some("="), false, false, false));
+
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "a         = 1");
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).unwrap().text, "long_name = 2");
+    assert_eq!(s.doc.para_at(&Pos::body(2, 0)).unwrap().text, "c         = 3");
+}
+
+#[test]
+fn vim_ex_reg_and_marks() {
+    let mut s = new_session("test");
+    s.vim.registers.insert('a', "stored value".to_string());
+    s.vim.marks.insert('m', Pos::body(0, 2));
+
+    let res_reg = crate::vim::ex::execute_ex(&mut s, ":reg");
+    assert!(!res_reg.is_error);
+    assert!(res_reg.message.contains("\"a  stored value"));
+
+    let res_marks = crate::vim::ex::execute_ex(&mut s, ":marks");
+    assert!(!res_marks.is_error);
+    assert!(res_marks.message.contains("'m  line 1 col 2"));
+}
+
+#[test]
+fn vim_macro_record_and_replay() {
+    let mut s = new_session("foo bar baz qux");
+    s.sel = Selection::caret(Pos::body(0, 0));
+
+    // Record into register a: qa dw q
+    assert!(s.handle_vim_key("Q", Some("q"), false, false, false));
+    assert!(s.handle_vim_key("A", Some("a"), false, false, false));
+    assert_eq!(s.vim.macro_state.recording, Some('a'));
+
+    // Keystrokes in macro: dw
+    assert!(s.handle_vim_key("D", Some("d"), false, false, false));
+    assert!(s.handle_vim_key("W", Some("w"), false, false, false));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "bar baz qux");
+
+    // Stop recording: q
+    assert!(s.handle_vim_key("Q", Some("q"), false, false, false));
+    assert_eq!(s.vim.macro_state.recording, None);
+    assert!(s.vim.macro_state.get('a').is_some());
+
+    // Replay macro: @a
+    assert!(s.handle_vim_key("@", Some("@"), false, false, false));
+    assert!(s.handle_vim_key("A", Some("a"), false, false, false));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "baz qux");
+
+    // Repeat macro: @@
+    assert!(s.handle_vim_key("@", Some("@"), false, false, false));
+    assert!(s.handle_vim_key("@", Some("@"), false, false, false));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "qux");
+}
+
+#[test]
+fn vim_arithmetic_ctrl_a_and_ctrl_x() {
+    let mut s = new_session("count = 41;");
+    s.sel = Selection::caret(Pos::body(0, 0));
+
+    // Ctrl+A increments 41 to 42
+    assert!(s.handle_vim_key("A", None, true, false, false));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "count = 42;");
+
+    // 5 Ctrl+X decrements 42 - 5 = 37
+    assert!(s.handle_vim_key("5", Some("5"), false, false, false));
+    assert!(s.handle_vim_key("X", None, true, false, false));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "count = 37;");
+}
+
+#[test]
+fn vim_jump_list_ctrl_o_and_ctrl_i() {
+    let mut s = new_session("line 1\nline 2\nline 3\nline 4");
+    s.sel = Selection::caret(Pos::body(0, 0));
+
+    // Jump to line 4 (paragraph 3)
+    s.vim.jump_list.push(s.sel.focus.clone());
+    s.sel = Selection::caret(Pos::body(3, 0));
+
+    // Ctrl+O jumps back to line 1
+    assert!(s.handle_vim_key("O", None, true, false, false));
+    assert_eq!(s.sel.focus.path, Path::top(0));
+
+    // Ctrl+I jumps forward to line 4
+    assert!(s.handle_vim_key("I", None, true, false, false));
+    assert_eq!(s.sel.focus.path, Path::top(3));
+}
+
+#[test]
+fn vim_flash_authentic_labels_and_jump() {
+    let mut s = new_session("apple banana apricot avocado");
+    s.sel = Selection::caret(Pos::body(0, 0));
+
+    // 's' starts flash mode
+    assert!(s.handle_vim_key("S", Some("s"), false, false, false));
+    assert!(s.vim.flash_state.active);
+
+    // type query 'ap'
+    assert!(s.handle_vim_key("A", Some("a"), false, false, false));
+    assert!(s.handle_vim_key("P", Some("p"), false, false, false));
+
+    // 'ap' matches "apple" (off 0) and "apricot" (off 13)
+    assert_eq!(s.vim.flash_state.targets.len(), 2);
+    let target_label = s.vim.flash_state.targets[1].label;
+
+    // Press label for second target ("apricot")
+    assert!(s.handle_vim_key(&target_label.to_string(), Some(&target_label.to_string()), false, false, false));
+    assert_eq!(s.sel.focus.off, 13);
+    assert!(!s.vim.flash_state.active);
+}
+
+#[test]
+fn vim_ex_jumps_and_changes() {
+    let mut s = new_session("text");
+    s.vim.jump_list.push(Pos::body(0, 1));
+    s.vim.change_list.push(Pos::body(0, 3));
+
+    let res_j = crate::vim::ex::execute_ex(&mut s, ":jumps");
+    assert!(!res_j.is_error);
+    assert!(res_j.message.contains("jump line  col text"));
+
+    let res_c = crate::vim::ex::execute_ex(&mut s, ":changes");
+    assert!(!res_c.is_error);
+    assert!(res_c.message.contains("change line  col text"));
+}
+
+#[test]
+fn vim_motions_extended_words() {
+    let mut s = new_session("hello.world test_case (foo-bar)");
+    s.sel = Selection::caret(Pos::body(0, 0));
+
+    // 'e' moves to end of current word "hello" (index 4)
+    assert!(s.handle_vim_key("E", Some("e"), false, false, false));
+    assert_eq!(s.sel.focus.off, 4);
+
+    // 'e' again moves to end of punctuation "." (index 5)
+    assert!(s.handle_vim_key("E", Some("e"), false, false, false));
+    assert_eq!(s.sel.focus.off, 5);
+
+    // 'W' (WORD) moves to start of next whitespace-delimited WORD: "test_case" (index 12)
+    assert!(s.handle_vim_key("W", Some("W"), false, false, true));
+    assert_eq!(s.sel.focus.off, 12);
+
+    // 'E' moves to end of WORD "test_case" (index 20)
+    assert!(s.handle_vim_key("E", Some("E"), false, false, true));
+    assert_eq!(s.sel.focus.off, 20);
+
+    // 'B' moves backward to start of WORD "test_case" (index 12)
+    assert!(s.handle_vim_key("B", Some("B"), false, false, true));
+    assert_eq!(s.sel.focus.off, 12);
+
+    // 'ge' moves to end of previous word (index 10, end of "world")
+    assert!(s.handle_vim_key("G", Some("g"), false, false, false));
+    assert!(s.handle_vim_key("E", Some("e"), false, false, false));
+    assert_eq!(s.sel.focus.off, 10);
+}
+
+#[test]
+fn vim_motions_first_non_blank_and_pipe() {
+    let mut s = new_session("   leading spaces and text");
+    s.sel = Selection::caret(Pos::body(0, 10));
+
+    // '^' moves to first non-blank character (index 3)
+    assert!(s.handle_vim_key("^", Some("^"), false, false, true));
+    assert_eq!(s.sel.focus.off, 3);
+
+    // '10|' jumps to column 10 (index 9, 1-indexed)
+    assert!(s.handle_vim_key("1", Some("1"), false, false, false));
+    assert!(s.handle_vim_key("0", Some("0"), false, false, false));
+    assert!(s.handle_vim_key("|", Some("|"), false, false, true));
+    assert_eq!(s.sel.focus.off, 9);
+}
+
+#[test]
+fn vim_operators_shift_case_and_open() {
+    let mut s = new_session("hello world");
+    s.sel = Selection::caret(Pos::body(0, 0));
+
+    // 'gUU' uppercases the line
+    assert!(s.handle_vim_key("G", Some("g"), false, false, false));
+    assert!(s.handle_vim_key("U", Some("U"), false, false, true));
+    assert!(s.handle_vim_key("U", Some("U"), false, false, true));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "HELLO WORLD");
+
+    // 'guu' lowercases the line
+    assert!(s.handle_vim_key("G", Some("g"), false, false, false));
+    assert!(s.handle_vim_key("U", Some("u"), false, false, false));
+    assert!(s.handle_vim_key("U", Some("u"), false, false, false));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "hello world");
+
+    // 'I' moves to first non-blank and enters Insert mode
+    s.sel = Selection::caret(Pos::body(0, 6));
+    assert!(s.handle_vim_key("I", Some("I"), false, false, true));
+    assert_eq!(s.vim.mode, VimMode::Insert);
+    assert_eq!(s.sel.focus.off, 0);
+
+    // Escape back to Normal
+    assert!(s.handle_vim_key("Escape", None, false, false, false));
+    assert_eq!(s.vim.mode, VimMode::Normal);
+}

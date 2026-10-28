@@ -1238,6 +1238,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             "center" => (caret_y - viewport_h * 0.5).max(0.0),
             "top" => (caret_y - 40.0).max(0.0),
             "bottom" => (caret_y - viewport_h + 80.0).max(0.0),
+            "down_line" => (app.canvas.scroll_offset.y + 24.0).max(0.0),
+            "up_line" => (app.canvas.scroll_offset.y - 24.0).max(0.0),
             _ => caret_y,
         };
         app.canvas.scroll_request = Some(vec2(app.canvas.scroll_offset.x, target_y));
@@ -1604,6 +1606,83 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
             }
         }
+
+        // Vim search / flash / find backdrop dimming and target emphasis
+        let vim_search_active = app.session.vim.enabled
+            && ((app.session.vim.mode == wordcraft_engine::VimMode::Command
+                && (app.session.vim.cmd_input.starts_with('/') || app.session.vim.cmd_input.starts_with('?')))
+                || app.session.vim.flash_state.active
+                || matches!(app.session.vim.pending.as_str(), "f" | "F" | "t" | "T"));
+
+        if vim_search_active {
+            let dim_color = Color32::from_black_alpha(140);
+            for pr in &rects {
+                painter.rect_filled(*pr, 0.0, dim_color);
+            }
+
+            if app.session.vim.flash_state.active {
+                for target in &app.session.vim.flash_state.targets {
+                    let pb = wordcraft_doc::Pos { off: target.pos.off + 1, ..target.pos.clone() };
+                    for (pi, r) in layout.selection_rects(&app.session.doc, &target.pos, &pb, app.session.page_hint) {
+                        if let Some(pr) = rects.get(pi) {
+                            let scale = layout.pages.get(pi).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
+                            let hr =
+                                Rect::from_min_size(pos2(pr.min.x + r.x * scale, pr.min.y + r.y * scale), vec2((r.w * scale).max(12.0), r.h * scale));
+                            let badge_rect = hr.expand(1.0);
+                            painter.rect_filled(badge_rect, 2.0, Color32::from_rgb(255, 204, 0));
+                            painter.rect_stroke(badge_rect, 2.0, Stroke::new(1.0, Color32::BLACK), egui::StrokeKind::Outside);
+                            let font = egui::FontId::monospace(11.0);
+                            painter.text(badge_rect.center(), egui::Align2::CENTER_CENTER, target.label.to_string(), font, Color32::BLACK);
+                        }
+                    }
+                }
+            } else if app.session.vim.mode == wordcraft_engine::VimMode::Command && app.session.vim.cmd_input.len() > 1 {
+                let query = &app.session.vim.cmd_input[1..];
+                let caret_pos = app.session.sel.focus.clone();
+                for (p_idx, b) in app.session.doc.body.iter().enumerate() {
+                    if let Some(para) = b.as_para() {
+                        let mut start = 0;
+                        while let Some(idx) = para.text[start..].find(query) {
+                            let match_off = start + idx;
+                            let pa = wordcraft_doc::Pos::body(p_idx, match_off);
+                            let pb = wordcraft_doc::Pos::body(p_idx, match_off + query.len());
+                            for (pi, r) in layout.selection_rects(&app.session.doc, &pa, &pb, app.session.page_hint) {
+                                if let Some(pr) = rects.get(pi) {
+                                    let scale = layout.pages.get(pi).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
+                                    let hr =
+                                        Rect::from_min_size(pos2(pr.min.x + r.x * scale, pr.min.y + r.y * scale), vec2(r.w * scale, r.h * scale));
+                                    let is_closest = pa >= caret_pos;
+                                    let badge_color = if is_closest { Color32::from_rgb(0, 210, 255) } else { Color32::from_rgb(255, 215, 0) };
+                                    painter.rect_filled(hr, 2.0, badge_color);
+                                    painter.rect_stroke(hr, 2.0, Stroke::new(1.0, Color32::BLACK), egui::StrokeKind::Outside);
+                                }
+                            }
+                            start = match_off + query.len().max(1);
+                        }
+                    }
+                }
+            } else if matches!(app.session.vim.pending.as_str(), "f" | "F" | "t" | "T") {
+                let focus = app.session.sel.focus.clone();
+                if let Some(para) = app.session.doc.para_at(&focus) {
+                    let forward = app.session.vim.pending == "f" || app.session.vim.pending == "t";
+                    for (off, ch) in para.text.char_indices() {
+                        let matches_dir = if forward { off > focus.off } else { off < focus.off };
+                        if matches_dir && !ch.is_whitespace() {
+                            let pa = wordcraft_doc::Pos { off, ..focus.clone() };
+                            let pb = wordcraft_doc::Pos { off: off + ch.len_utf8(), ..focus.clone() };
+                            for (pi, r) in layout.selection_rects(&app.session.doc, &pa, &pb, app.session.page_hint) {
+                                if let Some(pr) = rects.get(pi) {
+                                    let scale = layout.pages.get(pi).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
+                                    let hr =
+                                        Rect::from_min_size(pos2(pr.min.x + r.x * scale, pr.min.y + r.y * scale), vec2(r.w * scale, r.h * scale));
+                                    painter.rect_filled(hr, 1.0, Color32::from_rgb(255, 215, 0).gamma_multiply(0.85));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // Selection (a selected object shows its frame instead): whole table cells shade the
         // cells (an empty one too), a column selection each row's piece, text running into or
         // across a table the whole cells of the rows it takes.
@@ -1777,15 +1856,20 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             } else {
                 [pos2(x.round() + 0.5, y0), pos2(x.round() + 0.5, y1)]
             };
-            // The caret glides and fades like Word's (`caret_glide`).
+            // In Vim mode, snap instantaneously with 0ms lag like terminal Neovim (bypass Word's 100ms glide)
             let shown = preview_sel(app).unwrap_or(&app.session.sel).is_collapsed() && focused;
-            let look = crate::caret_glide::look(app, ui, content_origin, &geo, bar, shown, since, on);
+            let look = if app.session.vim.enabled {
+                crate::caret_glide::Look { bar, opacity: if shown { 1.0 } else { 0.0 }, moving: false }
+            } else {
+                crate::caret_glide::look(app, ui, content_origin, &geo, bar, shown, since, on)
+            };
             if shown && look.opacity > 0.0 {
                 let color = preedit_color.unwrap_or_else(|| caret_color(app));
                 if app.session.vim.enabled && app.session.vim.mode == wordcraft_engine::VimMode::Normal {
                     let block_w = (c.height * 0.55 * scale).max(8.0);
-                    let block_rect = Rect::from_min_max(pos2(look.bar[0].x, y0), pos2(look.bar[0].x + block_w, y1));
-                    painter.rect_filled(block_rect, 0.0, color.gamma_multiply(look.opacity * 0.65));
+                    let block_rect = Rect::from_min_max(pos2(bar[0].x, y0), pos2(bar[0].x + block_w, y1));
+                    let opacity = if since < 530.0 { 0.85 } else { (look.opacity * 0.85).max(0.3) };
+                    painter.rect_filled(block_rect, 0.0, color.gamma_multiply(opacity));
                 } else {
                     painter.line_segment(look.bar, Stroke::new(1.5, color.gamma_multiply(look.opacity)));
                 }

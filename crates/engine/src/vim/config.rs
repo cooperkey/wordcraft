@@ -3,8 +3,8 @@
 //! Loads user preferences and custom key mappings from `~/.config/wordcraft/vim.json` or
 //! `~/.config/wordcraft/init.vim` (on desktop platforms).
 
-use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Custom settings for Vim mode.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -18,6 +18,10 @@ pub struct VimConfig {
     pub normal_mappings: BTreeMap<String, String>,
     /// Custom key mappings for Visual mode (e.g. "<leader>b" -> "format.bold").
     pub visual_mappings: BTreeMap<String, String>,
+    /// Whether absolute line numbers are enabled.
+    pub line_numbers: bool,
+    /// Whether relative line numbers are enabled.
+    pub relative_numbers: bool,
 }
 
 impl Default for VimConfig {
@@ -59,6 +63,8 @@ impl Default for VimConfig {
             leader: " ".to_string(),
             normal_mappings,
             visual_mappings,
+            line_numbers: false,
+            relative_numbers: false,
         }
     }
 }
