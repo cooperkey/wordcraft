@@ -42,6 +42,8 @@
   <true/>
   <key>NSRequiresAquaSystemAppearance</key>
   <false/>
+  <key>ApplePressAndHoldEnabled</key>
+  <false/>
   <key>NSHumanReadableCopyright</key>
   <string>Copyright © the WordCraft authors. MIT OR Apache-2.0.</string>
 

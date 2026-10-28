@@ -704,22 +704,31 @@ pub fn fit_text(painter: &egui::Painter, text: &str, font: &FontId, tracking: f3
     if full <= width {
         return text.to_string();
     }
-    let count = text.chars().count();
-    // A rough cut first, so a long text doesn't need a layout for every character.
-    let per_char = (full / count as f32).max(0.5);
-    let mut shown: String = text.chars().take((width / per_char) as usize).collect();
-    while !shown.is_empty() && text_width(painter, &format!("{shown}…"), font, tracking, color) > width {
-        shown.pop();
+    let indices: Vec<usize> = text.char_indices().map(|(i, _)| i).collect();
+    if indices.is_empty() {
+        return String::new();
     }
-    if shown.is_empty() {
-        // Only the ellipsis is left: it stands for the whole text when it fits.
+    // Binary search for the maximum number of characters that fit with an ellipsis appended.
+    let mut low = 0;
+    let mut high = indices.len();
+    while low < high {
+        let mid = (low + high).div_ceil(2);
+        let byte_end = if mid < indices.len() { indices[mid] } else { text.len() };
+        let candidate_with_ell = format!("{}…", &text[..byte_end]);
+        if text_width(painter, &candidate_with_ell, font, tracking, color) <= width {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    if low == 0 {
         if text_width(painter, "…", font, tracking, color) <= width {
             return "…".to_string();
         }
         return String::new();
     }
-    shown.push('…');
-    shown
+    let byte_end = if low < indices.len() { indices[low] } else { text.len() };
+    format!("{}…", &text[..byte_end])
 }
 
 /// Paint one line of tracked text with the given anchor and return its rect.

@@ -373,7 +373,7 @@ fn east_asian_font(f: &skrifa::FontRef<'_>) -> bool {
 }
 
 /// A family name in another language, from a font's `name` table.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LocalName {
     /// BCP 47 language tag, lowercase (`zh-hans`, `zh-tw`, `ja-jp`).
     pub lang: String,
@@ -403,7 +403,7 @@ pub fn name_language_matches(ui: &str, tag: &str) -> bool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct CatalogEntry {
     family: String,
     style: String,
@@ -414,6 +414,27 @@ struct CatalogEntry {
     /// A Chinese, Japanese or Korean font ([`FontFace::is_east_asian`]).
     east_asian: bool,
     path: std::path::PathBuf,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(serde::Serialize, serde::Deserialize)]
+struct FontCatalogCache {
+    version: u32,
+    dir_mtimes: Vec<(std::path::PathBuf, u64)>,
+    entries: Vec<CatalogEntry>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn font_catalog_cache_path() -> Option<std::path::PathBuf> {
+    if let Some(h) = std::env::var_os("HOME").map(std::path::PathBuf::from) {
+        if cfg!(target_os = "macos") {
+            Some(h.join("Library/Caches/WordCraft/fonts-catalog-v1.json"))
+        } else {
+            Some(h.join(".cache/wordcraft/fonts-catalog-v1.json"))
+        }
+    } else {
+        None
+    }
 }
 
 /// Process-wide font database.
@@ -853,6 +874,18 @@ pub fn system_font_dirs() -> Vec<std::path::PathBuf> {
         dirs.extend(["/System/Library/Fonts", "/Library/Fonts"].map(Into::into));
         if let Some(h) = &home {
             dirs.push(h.join("Library/Fonts"));
+        }
+        // Common macOS office application font folders (OnlyOffice, LibreOffice, Microsoft)
+        for app_dir in [
+            "/Applications/ONLYOFFICE.app/Contents/Resources/login/fonts",
+            "/Applications/ONLYOFFICE.app/Contents/Resources/login/fonts/crosextra",
+            "/Applications/LibreOffice.app/Contents/Resources/fonts",
+            "/Library/Application Support/Microsoft/Fonts",
+        ] {
+            let p = std::path::PathBuf::from(app_dir);
+            if p.is_dir() {
+                dirs.push(p);
+            }
         }
         // Fonts macOS ships as assets (PingFang, Yu Mincho, …): com_apple_MobileAsset_Font<N>
         // (`Assets` before macOS 11, `AssetsV2` since).
@@ -1330,13 +1363,59 @@ impl FontDb {
         // The first scan, or a rescan once it is done (never both at once).
         let mut first = None;
         self.cataloged.get_or_init(|| first = Some(self.scan_font_dirs()));
-        first.unwrap_or_else(|| self.scan_font_dirs())
+        first.unwrap_or_else(|| self.scan_font_dirs_internal(false))
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     fn scan_font_dirs(&self) -> usize {
+        self.scan_font_dirs_internal(true)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn scan_font_dirs_internal(&self, check_cache: bool) -> usize {
+        let cache_path = font_catalog_cache_path();
+        if check_cache
+            && let Some(ref cp) = cache_path
+            && let Ok(bytes) = std::fs::read(cp)
+            && let Ok(cache) = serde_json::from_slice::<FontCatalogCache>(&bytes)
+            && cache.version == 1
+            && !cache.entries.is_empty()
+        {
+            let mut valid = true;
+            for (dir, expected_mtime) in &cache.dir_mtimes {
+                let current_mtime = std::fs::metadata(dir)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                if current_mtime != *expected_mtime {
+                    valid = false;
+                    break;
+                }
+            }
+            if valid {
+                let n = cache.entries.len();
+                log::debug!("loaded {n} system font faces from cache");
+                *self.catalog.write().unwrap_or_else(std::sync::PoisonError::into_inner) = cache.entries;
+                self.catalog_gen.fetch_add(1, Ordering::AcqRel);
+                return n;
+            }
+        }
+
         let mut found = Vec::new();
         let mut stack = self.font_dirs.clone();
+        let mut dir_mtimes = Vec::new();
+        for d in &self.font_dirs {
+            let mtime = std::fs::metadata(d)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            dir_mtimes.push((d.clone(), mtime));
+        }
+
         // Each folder once, however links lead back to it.
         let mut visited = std::collections::HashSet::new();
         while let Some(d) = stack.pop() {
@@ -1370,6 +1449,17 @@ impl FontDb {
         }
         let n = found.len();
         log::debug!("cataloged {n} system font faces");
+
+        if let Some(ref cp) = cache_path {
+            if let Some(parent) = cp.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let cache = FontCatalogCache { version: 1, dir_mtimes, entries: found.clone() };
+            if let Ok(bytes) = serde_json::to_vec(&cache) {
+                let _ = std::fs::write(cp, bytes);
+            }
+        }
+
         *self.catalog.write().unwrap_or_else(std::sync::PoisonError::into_inner) = found;
         self.catalog_gen.fetch_add(1, Ordering::AcqRel);
         n

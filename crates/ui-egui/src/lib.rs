@@ -766,6 +766,8 @@ impl WordApp {
     /// services, printing, canvas, dialogs, previews, control and screenshot state, font and theme
     /// tracking.
     pub fn new(session: Session, services: Services) -> Self {
+        #[cfg(not(target_arch = "wasm32"))]
+        wordcraft_fonts::FontDb::global().scan_in_background();
         // Numeral › System follows the system locale, found here rather than in layout.
         if let Some(tag) = sys_locale::get_locale() {
             wordcraft_engine::set_system_locale(&tag);

@@ -829,6 +829,17 @@ struct ComboSearch {
     view_h: f32,
 }
 
+/// Whether the combo box `id` is open, focused, or has its popup menu showing.
+pub fn is_combo_open(ui: &Ui, id: &str) -> bool {
+    let search_id = ui.scope_id().with(("combo_search", id));
+    let open_search = ui.data(|d| d.get_temp::<ComboSearch>(search_id)).is_some_and(|s| s.open);
+    let te_id = ui.scope_id().with(("combo_edit", id));
+    let has_focus = ui.memory(|m| m.has_focus(te_id));
+    let popup_id = ui.scope_id().with(("combo_popup_open", id));
+    let popup_open = ui.data(|d| d.get_temp::<bool>(popup_id)).unwrap_or(false);
+    open_search || has_focus || popup_open
+}
+
 /// Draws an editable or searchable combo box: keeps temporary text and search state, supports
 /// keyboard selection, popup rows with recent and preview sections, an arrow and hint, and
 /// returns the chosen or committed text.
@@ -956,7 +967,10 @@ fn combo_impl(
         // The list drops from the box's left edge, as in Word, not from the arrow (#535).
         // The font list closes on a chosen entry or a click outside it, not on its headings.
         let close = if search { egui::PopupCloseBehavior::CloseOnClickOutside } else { egui::PopupCloseBehavior::CloseOnClick };
+        let popup_id = ui.scope_id().with(("combo_popup_open", id));
+        let mut was_open = false;
         egui::Popup::menu(&aresp).anchor(resp.rect.union(ar)).close_behavior(close).show(|ui| {
+            was_open = true;
             let item = |k: usize| items.get(k);
             let row = |k: usize| section_row(k, recent, &item);
             if let Some(v) = list_rows(ui, width, current, section_rows(recent.len(), items.len()), &row, None, None, preview).0 {
@@ -976,6 +990,7 @@ fn combo_impl(
                 }
             }
         });
+        ui.data_mut(|d| d.insert_temp(popup_id, was_open));
         let n = section_rows(recent_shown.len(), s.matches.len());
         if s.open && n > 0 {
             let matches = s.matches.clone();

@@ -199,14 +199,12 @@ impl Previews {
     /// The name the font box shows for the document's font `family`: its name in the interface
     /// language when the font has one.
     pub fn font_shown(&mut self, family: &str) -> String {
-        self.families();
         self.local_names.get(&family.to_lowercase()).cloned().unwrap_or_else(|| family.to_string())
     }
 
     /// The family name a font chosen in the font box is stored as: the English name for a font
     /// listed by its localized name (宋体 → SimSun), so the document reads the same anywhere.
     pub fn font_stored(&mut self, shown: &str) -> String {
-        self.families();
         self.english_names.get(shown).cloned().unwrap_or_else(|| shown.to_string())
     }
 
@@ -282,7 +280,7 @@ impl Previews {
             self.frame = frame;
             self.budget.set(0);
         }
-        if self.budget.get() > 8 {
+        if self.budget.get() >= 1 {
             ctx.request_repaint();
             return None;
         }

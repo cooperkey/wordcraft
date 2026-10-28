@@ -1122,7 +1122,8 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
             crate::widgets::row(ui, |ui| {
                 let font = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
                 let font = app.previews.font_shown(&font);
-                let fams = app.previews.families();
+                let open = crate::widgets::is_combo_open(ui, "font");
+                let fams = if open { app.previews.families() } else { Vec::new() };
                 let recent: Vec<String> = app.ui.recent_fonts.iter().map(|f| app.previews.font_shown(f)).collect();
                 let prev = app.previews.font_preview_fn();
                 if let Some(f) = crate::widgets::font_combo_with_recent_hint(ui, "font", 150.0, &font, &fams, &recent, Some(&*prev), tl!("Font")) {

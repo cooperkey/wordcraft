@@ -291,13 +291,9 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
         .show(ui, |ui| {
             let full = ui.max_rect();
             // Drag the window by the title bar (integrated title bar on macOS).
-            let drag = ui.interact(full, ui.scope_id().with("title_drag"), Sense::click_and_drag());
+            let drag = ui.interact(full, ui.scope_id().with("title_drag"), Sense::drag());
             if drag.drag_started() {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
-            }
-            if drag.double_clicked() {
-                let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
             }
             let mut qat_end = full.min.x;
             let mut right_start = full.max.x;
@@ -397,13 +393,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
             let track = TypeRung::Chrome.tracking();
             let cx = full.center().x;
             let available = 2.0 * (cx - qat_end - 10.0).min(right_start - 10.0 - cx);
-            let mut shown: String = title.chars().take(240).collect();
-            if text_width(ui.painter(), &shown, &font, track, t.text) > available {
-                while !shown.is_empty() && text_width(ui.painter(), &format!("{shown}…"), &font, track, t.text) > available {
-                    shown.pop();
-                }
-                shown.push('…');
-            }
+            let shown = fit_text(ui.painter(), &title, &font, track, t.text, available);
             let w = text_width(ui.painter(), &shown, &font, track, t.text);
             if available > 24.0 {
                 let rect = Rect::from_center_size(pos2(cx, full.center().y), vec2(w + 8.0, control_h));
@@ -593,7 +583,9 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     let _ = app.run("ui.dialog", json!({"name": "wordCount"}));
                 }
                 let vim_badge = if app.session.vim.enabled {
-                    if app.session.vim.mode == wordcraft_engine::VimMode::Command {
+                    if let Some(ref hex) = app.session.vim.unicode_hex_layer {
+                        wordcraft_engine::vim::unicode::format_display(hex)
+                    } else if app.session.vim.mode == wordcraft_engine::VimMode::Command {
                         format!("{}█", app.session.vim.cmd_input)
                     } else if let Some(msg) = &app.session.vim.status_msg {
                         format!("{} | {msg}", app.session.vim.mode.badge())
