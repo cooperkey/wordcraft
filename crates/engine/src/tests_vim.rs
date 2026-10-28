@@ -349,6 +349,54 @@ fn vim_char_find_and_repeat() {
 }
 
 #[test]
+fn vim_char_find_with_shift_modifiers() {
+    let mut s = new_session("Hello World: (Important!)");
+    s.sel = Selection::caret(Pos::body(0, 0));
+
+    // 'f' followed by Shift down (None text event) then shifted 'W'
+    assert!(s.handle_vim_key("F", Some("f"), false, false, false));
+    assert!(s.handle_vim_key("", None, false, false, true)); // Shift key press must not cancel pending 'f'
+    assert!(s.handle_vim_key("W", Some("W"), false, false, true));
+    assert_eq!(s.sel.focus.off, 6); // Offset of 'W' in "Hello World: (Important!)"
+
+    // 'f' followed by Shift down then shifted ':'
+    assert!(s.handle_vim_key("F", Some("f"), false, false, false));
+    assert!(s.handle_vim_key("", None, false, false, true));
+    assert!(s.handle_vim_key("Colon", Some(":"), false, false, true));
+    assert_eq!(s.sel.focus.off, 11);
+
+    // 'f' followed by Shift down then shifted '('
+    assert!(s.handle_vim_key("F", Some("f"), false, false, false));
+    assert!(s.handle_vim_key("", None, false, false, true));
+    assert!(s.handle_vim_key("OpenBracket", Some("("), false, false, true));
+    assert_eq!(s.sel.focus.off, 13);
+
+    // 'F' (Shift+F backward) followed by Shift down then shifted 'W'
+    assert!(s.handle_vim_key("F", Some("F"), false, false, true));
+    assert!(s.handle_vim_key("", None, false, false, true));
+    assert!(s.handle_vim_key("W", Some("W"), false, false, true));
+    assert_eq!(s.sel.focus.off, 6);
+
+    // 't' followed by Shift down then shifted '!' rests right before '!' at index 23
+    assert!(s.handle_vim_key("T", Some("t"), false, false, false));
+    assert!(s.handle_vim_key("", None, false, false, true));
+    assert!(s.handle_vim_key("Exclamationmark", Some("!"), false, false, true));
+    assert_eq!(s.sel.focus.off, 22); // character 't' at 22, right before '!' at 23
+
+    // 'T' (Shift+T backward) followed by Shift down then shifted 'W' rests right after 'W'
+    assert!(s.handle_vim_key("T", Some("T"), false, false, true));
+    assert!(s.handle_vim_key("", None, false, false, true));
+    assert!(s.handle_vim_key("W", Some("W"), false, false, true));
+    assert_eq!(s.sel.focus.off, 7);
+
+    // 'r' followed by Shift down then shifted 'Z'
+    assert!(s.handle_vim_key("R", Some("r"), false, false, false));
+    assert!(s.handle_vim_key("", None, false, false, true));
+    assert!(s.handle_vim_key("Z", Some("Z"), false, false, true));
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text.chars().nth(7).unwrap(), 'Z');
+}
+
+#[test]
 fn vim_visual_char_find_vf() {
     let mut s = new_session("Hello World. Test.");
     s.sel = Selection::caret(Pos::body(0, 0));

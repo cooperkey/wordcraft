@@ -33,18 +33,24 @@ pub fn key_name(k: Key) -> Option<&'static str> {
         Key::Escape => "Escape",
         Key::Space => "Space",
         Key::Insert => "Insert",
-        Key::Equals | Key::Plus => "=",
+        Key::Equals => "=",
+        Key::Plus => "+",
         Key::Minus => "-",
         Key::Period => ".",
         Key::Comma => ",",
         Key::OpenBracket => "[",
         Key::CloseBracket => "]",
+        Key::OpenCurlyBracket => "{",
+        Key::CloseCurlyBracket => "}",
         Key::Colon => ":",
         Key::Semicolon => ";",
         Key::Slash => "/",
         Key::Questionmark => "?",
+        Key::Exclamationmark => "!",
         Key::Quote => "'",
         Key::Backtick => "`",
+        Key::Backslash => "\\",
+        Key::Pipe => "|",
         Key::Num0 => "0",
         Key::Num1 => "1",
         Key::Num2 => "2",
@@ -571,8 +577,16 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                     } else if app.session.vim.mode == wordcraft_engine::VimMode::Insert {
                         app.session.vim.insert_buf.push_str(&t);
                     } else {
-                        // In Normal / Visual / VisualBlock / Replace modes, all typing is processed via Event::Key.
-                        // Swallow Event::Text so held keys and text inputs never double-execute or stutter.
+                        // In Normal / Visual / VisualBlock / Replace modes, if Event::Key didn't handle it
+                        // (e.g. international character or pending f/t/r target), pass it to Vim here:
+                        if !app.session.vim.pending.is_empty() || app.session.vim.replace_char_pending {
+                            let handled = app.session.handle_vim_key("Text", Some(&t), false, false, false);
+                            if handled {
+                                ctx.request_repaint();
+                                continue;
+                            }
+                        }
+                        // Otherwise swallow Event::Text so held keys never double-execute or stutter.
                         continue;
                     }
                 }
@@ -656,6 +670,9 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                 let _ = app.run(id, json!({}));
             }
             egui::Event::Key { key, pressed: true, modifiers, .. } => {
+                if is_modifier_key(key) {
+                    continue;
+                }
                 if key == Key::Escape && app.session.painter.is_some() {
                     app.session.painter = None;
                     continue;
@@ -845,16 +862,22 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                             Key::Num9 => Some(if modifiers.shift { "(" } else { "9" }),
                             Key::OpenBracket => Some(if modifiers.shift { "{" } else { "[" }),
                             Key::CloseBracket => Some(if modifiers.shift { "}" } else { "]" }),
+                            Key::OpenCurlyBracket => Some("{"),
+                            Key::CloseCurlyBracket => Some("}"),
                             Key::Period => Some(if modifiers.shift { ">" } else { "." }),
                             Key::Comma => Some(if modifiers.shift { "<" } else { "," }),
                             Key::Minus => Some(if modifiers.shift { "_" } else { "-" }),
-                            Key::Equals | Key::Plus => Some(if modifiers.shift { "+" } else { "=" }),
+                            Key::Equals => Some(if modifiers.shift { "+" } else { "=" }),
+                            Key::Plus => Some("+"),
                             Key::Slash => Some(if modifiers.shift { "?" } else { "/" }),
                             Key::Questionmark => Some("?"),
+                            Key::Exclamationmark => Some("!"),
                             Key::Colon => Some(":"),
                             Key::Semicolon => Some(if modifiers.shift { ":" } else { ";" }),
                             Key::Quote => Some(if modifiers.shift { "\"" } else { "'" }),
                             Key::Backtick => Some(if modifiers.shift { "~" } else { "`" }),
+                            Key::Backslash => Some(if modifiers.shift { "|" } else { "\\" }),
+                            Key::Pipe => Some("|"),
                             Key::Space => Some(" "),
                             _ => None,
                         };

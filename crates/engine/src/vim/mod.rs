@@ -315,25 +315,23 @@ impl VimState {
                     let _ = session.run("caret.left", &json!({}));
                 }
                 self.last_change = Some(LastVimChange::ReplaceChar(c));
+                self.replace_char_pending = false;
             }
-            self.replace_char_pending = false;
             return true;
         }
 
         // Register prefix: "{reg}
         if self.pending == "\"" {
-            match input_char {
-                Some(c)
-                    if c.is_ascii_lowercase()
-                        || c.is_ascii_uppercase()
-                        || c.is_ascii_digit()
-                        || matches!(c, '+' | '*' | '_' | '-' | '.' | ':' | '%' | '/' | '=') =>
+            if let Some(c) = input_char {
+                if c.is_ascii_lowercase()
+                    || c.is_ascii_uppercase()
+                    || c.is_ascii_digit()
+                    || matches!(c, '+' | '*' | '_' | '-' | '.' | ':' | '%' | '/' | '=')
                 {
                     self.current_register = Some(c);
                 }
-                _ => {}
+                self.pending.clear();
             }
-            self.pending.clear();
             return true;
         }
 
@@ -344,8 +342,8 @@ impl VimState {
             {
                 self.marks.set(c, session.sel.focus.clone());
                 self.status_msg = Some(format!("mark '{c}' set"));
+                self.pending.clear();
             }
-            self.pending.clear();
             return true;
         }
 
@@ -373,8 +371,8 @@ impl VimState {
                 } else {
                     self.status_msg = Some(format!("E20: Mark not set: {c}"));
                 }
+                self.pending.clear();
             }
-            self.pending.clear();
             return true;
         }
 
@@ -413,8 +411,8 @@ impl VimState {
             if let Some(c) = input_char.filter(|c| c.is_ascii_lowercase() || c.is_ascii_digit()) {
                 self.macro_state.start_recording(c);
                 self.status_msg = Some(format!("recording @{c}"));
+                self.pending.clear();
             }
-            self.pending.clear();
             return true;
         }
 
@@ -443,8 +441,8 @@ impl VimState {
                         return true;
                     }
                 }
+                self.pending.clear();
             }
-            self.pending.clear();
             return true;
         }
 
@@ -901,8 +899,8 @@ impl VimState {
                     let find = motion::CharFind { target, forward, till };
                     self.last_char_find = Some(find);
                     motion::execute_char_find(session, find, false);
+                    self.reset_pending();
                 }
-                self.reset_pending();
                 return true;
             }
 
@@ -1502,8 +1500,8 @@ impl VimState {
                         self.last_change = Some(LastVimChange::DeleteCharFind(find));
                     }
                 }
+                self.reset_pending();
             }
-            self.reset_pending();
             return true;
         }
 
@@ -2032,8 +2030,8 @@ impl VimState {
                 let find = motion::CharFind { target, forward, till };
                 self.last_char_find = Some(find);
                 motion::execute_char_find(session, find, true);
+                self.reset_pending();
             }
-            self.reset_pending();
             return true;
         }
 
