@@ -1251,8 +1251,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             pos2(pr.min.x + c.x * geo.scale, pr.min.y + c.top * geo.scale),
             vec2((c.width * geo.scale).max(2.0), c.height * geo.scale),
         );
-        let scrolloff = if app.session.vim.enabled { 140.0 } else { 60.0 };
-        scroll_target = Some(r.expand2(vec2(40.0, scrolloff)));
+        let scrolloff = if app.session.vim.enabled { 50.0 } else { 40.0 };
+        scroll_target = Some(r.expand2(vec2(20.0, scrolloff)));
     }
     app.canvas.scroll_to_caret = false;
     let mut origin = area.min;
@@ -1359,7 +1359,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         ui.advance_cursor_after_rect(content);
         let resp = ui.interact(content, egui::Id::unique("wordcraft_canvas"), Sense::click_and_drag());
         if let Some(tr) = scroll_target {
-            ui.scroll_to_rect(Rect::from_min_size(ui.min_rect().min + tr.min.to_vec2(), tr.size()), None);
+            let margin = 20.0;
+            if tr.min.y < viewport.min.y + margin || tr.max.y > viewport.max.y - margin || tr.min.x < viewport.min.x || tr.max.x > viewport.max.x {
+                ui.scroll_to_rect(Rect::from_min_size(ui.min_rect().min + tr.min.to_vec2(), tr.size()), None);
+            }
         }
         // Read Mode's neighbouring columns end right at the viewport's edges: keep their
         // shadows from showing there as hairlines.
@@ -1639,10 +1642,15 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             } else if app.session.vim.mode == wordcraft_engine::VimMode::Command && app.session.vim.cmd_input.len() > 1 {
                 let query = &app.session.vim.cmd_input[1..];
                 let caret_pos = app.session.sel.focus.clone();
+                let mut match_count = 0;
                 for (p_idx, b) in app.session.doc.body.iter().enumerate() {
+                    if match_count >= 100 {
+                        break;
+                    }
                     if let Some(para) = b.as_para() {
                         let mut start = 0;
                         while let Some(idx) = para.text[start..].find(query) {
+                            match_count += 1;
                             let match_off = start + idx;
                             let pa = wordcraft_doc::Pos::body(p_idx, match_off);
                             let pb = wordcraft_doc::Pos::body(p_idx, match_off + query.len());
@@ -1658,6 +1666,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 }
                             }
                             start = match_off + query.len().max(1);
+                            if match_count >= 100 {
+                                break;
+                            }
                         }
                     }
                 }
@@ -1665,9 +1676,14 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 let focus = app.session.sel.focus.clone();
                 if let Some(para) = app.session.doc.para_at(&focus) {
                     let forward = app.session.vim.pending == "f" || app.session.vim.pending == "t";
+                    let mut targets_drawn = 0;
                     for (off, ch) in para.text.char_indices() {
+                        if targets_drawn >= 50 {
+                            break;
+                        }
                         let matches_dir = if forward { off > focus.off } else { off < focus.off };
                         if matches_dir && !ch.is_whitespace() {
+                            targets_drawn += 1;
                             let pa = wordcraft_doc::Pos { off, ..focus.clone() };
                             let pb = wordcraft_doc::Pos { off: off + ch.len_utf8(), ..focus.clone() };
                             for (pi, r) in layout.selection_rects(&app.session.doc, &pa, &pb, app.session.page_hint) {
@@ -1865,7 +1881,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             };
             if shown && look.opacity > 0.0 {
                 let color = preedit_color.unwrap_or_else(|| caret_color(app));
-                if app.session.vim.enabled && (app.session.vim.mode == wordcraft_engine::VimMode::Normal || app.session.vim.mode == wordcraft_engine::VimMode::Replace) {
+                if app.session.vim.enabled
+                    && (app.session.vim.mode == wordcraft_engine::VimMode::Normal || app.session.vim.mode == wordcraft_engine::VimMode::Replace)
+                {
                     let block_w = (c.height * 0.55 * scale).max(8.0);
                     if app.session.vim.mode == wordcraft_engine::VimMode::Replace {
                         let half_y0 = y1 - (y1 - y0) * 0.25;

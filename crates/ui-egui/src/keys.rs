@@ -39,6 +39,12 @@ pub fn key_name(k: Key) -> Option<&'static str> {
         Key::Comma => ",",
         Key::OpenBracket => "[",
         Key::CloseBracket => "]",
+        Key::Colon => ":",
+        Key::Semicolon => ";",
+        Key::Slash => "/",
+        Key::Questionmark => "?",
+        Key::Quote => "'",
+        Key::Backtick => "`",
         Key::Num0 => "0",
         Key::Num1 => "1",
         Key::Num2 => "2",
@@ -565,29 +571,8 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                     } else if app.session.vim.mode == wordcraft_engine::VimMode::Insert {
                         app.session.vim.insert_buf.push_str(&t);
                     } else {
-                        // In Normal / Visual / VisualBlock modes, held keys arrive as repeated Event::Text.
-                        for c in t.chars() {
-                            let key_name = match c {
-                                'h' => "H",
-                                'j' => "J",
-                                'k' => "K",
-                                'l' => "L",
-                                'w' => "W",
-                                'b' => "B",
-                                'e' => "E",
-                                '0' => "0",
-                                '$' => "$",
-                                '^' => "^",
-                                'x' => "X",
-                                _ => "Text",
-                            };
-                            let handled = app.session.handle_vim_key(key_name, Some(&c.to_string()), false, false, c.is_uppercase());
-                            if handled {
-                                app.canvas.scroll_to_caret = true;
-                                app.canvas.caret_visible_since = crate::now_ms();
-                                ctx.request_repaint();
-                            }
-                        }
+                        // In Normal / Visual / VisualBlock / Replace modes, all typing is processed via Event::Key.
+                        // Swallow Event::Text so held keys and text inputs never double-execute or stutter.
                         continue;
                     }
                 }
@@ -730,14 +715,52 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                 if leave_full_screen(app, ctx, key, modifiers, true) {
                     continue;
                 }
+
+                // Application command shortcuts (Command on macOS, or Shift + Function / Tab / Navigation keys)
+                // take priority over Vim modal typing so the user's desktop shortcuts (Cmd+Z, Cmd+Shift+Z, Cmd+S,
+                // Cmd+Shift+S, Cmd+B, Cmd+I, Shift+F3, Shift+Tab, etc.) always work reliably.
+                let is_app_shortcut = modifiers.command
+                    || (modifiers.shift
+                        && matches!(
+                            key,
+                            Key::F1
+                                | Key::F2
+                                | Key::F3
+                                | Key::F4
+                                | Key::F5
+                                | Key::F6
+                                | Key::F7
+                                | Key::F8
+                                | Key::F9
+                                | Key::F10
+                                | Key::F11
+                                | Key::F12
+                                | Key::Tab
+                        ))
+                    || (modifiers.shift
+                        && !modifiers.ctrl
+                        && !modifiers.alt
+                        && matches!(
+                            key,
+                            Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown | Key::Home | Key::End | Key::PageUp | Key::PageDown
+                        )
+                        && (app.session.vim.mode == wordcraft_engine::VimMode::Insert || !app.session.vim.enabled));
+
+                if is_app_shortcut && dispatch(app, key, modifiers) {
+                    app.canvas.swallow_text = true;
+                    ctx.request_repaint();
+                    continue;
+                }
+
                 if app.session.vim.enabled {
-                    if key == Key::Escape || ((modifiers.ctrl || modifiers.command) && key == Key::OpenBracket) {
+                    if key == Key::Escape || (modifiers.ctrl && key == Key::OpenBracket) {
                         let _ = app.session.handle_vim_key("Escape", None, false, false, false);
                         app.canvas.swallow_text = true;
                         app.canvas.caret_visible_since = crate::now_ms();
+                        ctx.request_repaint();
                         continue;
                     }
-                    if modifiers.ctrl && key == Key::V {
+                    if modifiers.ctrl && key == Key::V && app.session.vim.mode != wordcraft_engine::VimMode::Insert {
                         let handled = app.session.handle_vim_key("V", None, true, false, false);
                         app.canvas.swallow_text = true;
                         if handled {
@@ -747,7 +770,7 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                             continue;
                         }
                     }
-                    if modifiers.ctrl && key == Key::Q {
+                    if modifiers.ctrl && key == Key::Q && app.session.vim.mode != wordcraft_engine::VimMode::Insert {
                         let handled = app.session.handle_vim_key("Q", None, true, false, false);
                         app.canvas.swallow_text = true;
                         if handled {
@@ -767,9 +790,21 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                             let name = key_name(key).unwrap_or("");
                             let _ = app.session.handle_vim_key(name, None, modifiers.ctrl, modifiers.alt, modifiers.shift);
                             app.canvas.swallow_text = true;
+                            ctx.request_repaint();
                             continue;
                         }
-                    } else if app.session.vim.mode != wordcraft_engine::VimMode::Insert {
+                    } else if app.session.vim.mode == wordcraft_engine::VimMode::Insert {
+                        if modifiers.ctrl {
+                            let name = key_name(key).unwrap_or("");
+                            let handled = app.session.handle_vim_key(name, None, true, modifiers.alt, modifiers.shift);
+                            if handled {
+                                app.canvas.swallow_text = true;
+                                app.canvas.caret_visible_since = crate::now_ms();
+                                ctx.request_repaint();
+                                continue;
+                            }
+                        }
+                    } else {
                         let name = key_name(key).unwrap_or("");
                         let text = match key {
                             Key::A => Some(if modifiers.shift { "A" } else { "a" }),
@@ -813,7 +848,7 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                             Key::Period => Some(if modifiers.shift { ">" } else { "." }),
                             Key::Comma => Some(if modifiers.shift { "<" } else { "," }),
                             Key::Minus => Some(if modifiers.shift { "_" } else { "-" }),
-                            Key::Equals => Some(if modifiers.shift { "+" } else { "=" }),
+                            Key::Equals | Key::Plus => Some(if modifiers.shift { "+" } else { "=" }),
                             Key::Slash => Some(if modifiers.shift { "?" } else { "/" }),
                             Key::Questionmark => Some("?"),
                             Key::Colon => Some(":"),
@@ -823,10 +858,9 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                             Key::Space => Some(" "),
                             _ => None,
                         };
-                        let ctrl = modifiers.ctrl || (cfg!(target_os = "macos") && modifiers.command);
-                        let handled = app.session.handle_vim_key(name, text, ctrl, modifiers.alt, modifiers.shift);
-                        app.canvas.swallow_text = true;
+                        let handled = app.session.handle_vim_key(name, text, modifiers.ctrl, modifiers.alt, modifiers.shift);
                         if handled {
+                            app.canvas.swallow_text = true;
                             app.canvas.scroll_to_caret = true;
                             app.canvas.caret_visible_since = crate::now_ms();
                             ctx.request_repaint();

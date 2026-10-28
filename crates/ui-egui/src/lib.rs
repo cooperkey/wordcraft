@@ -644,6 +644,8 @@ pub struct WordApp {
     /// The document (id, revision) whose comment text [`WordApp::ensure_comment_fonts`] last
     /// looked at.
     comment_fonts_for: Option<(u64, u64)>,
+    /// The document title stem [`WordApp::ensure_caption_fonts`] last looked at.
+    caption_fonts_for: Option<String>,
     /// The Recover list's document names [`WordApp::ensure_recover_fonts`] last looked at.
     recover_fonts_for: Option<u64>,
     /// The list of recent document paths [`WordApp::ensure_recent_fonts`] last looked at.
@@ -789,6 +791,7 @@ impl WordApp {
             keytip_rects,
             nav_search_focus,
             comment_fonts_for,
+            caption_fonts_for,
             find_fonts_for,
             sent_title,
             sent_full_screen,
@@ -898,6 +901,7 @@ impl WordApp {
             keytip_rects,
             nav_search_focus,
             comment_fonts_for,
+            caption_fonts_for,
             find_fonts_for,
             sent_title,
             sent_full_screen,
@@ -2279,6 +2283,10 @@ impl WordApp {
     /// those collections are too large to add here.
     fn ensure_caption_fonts(&mut self) {
         let stem = self.title_stem();
+        if self.caption_fonts_for.as_deref() == Some(&stem) {
+            return;
+        }
+        self.caption_fonts_for = Some(stem.clone());
         if stem.chars().any(wordcraft_fonts::is_cjk) {
             self.want_system_cjk = true;
         }
