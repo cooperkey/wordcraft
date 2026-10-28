@@ -131,7 +131,7 @@ pub fn execute_ex(session: &mut Session, line: &str) -> ExResult {
         let vim = &session.vim;
         let mut lines = Vec::new();
         lines.push("--- Marks ---".to_string());
-        let mut keys: Vec<char> = vim.marks.keys().copied().collect();
+        let mut keys = vim.marks.keys();
         keys.sort();
         for k in keys {
             if let Some(pos) = vim.marks.get(&k) {

@@ -6,8 +6,10 @@
 pub mod config;
 pub mod ex;
 pub mod flash;
+pub mod insert;
 pub mod jump_list;
 pub mod macro_rec;
+pub mod marks;
 pub mod motion;
 pub mod registers;
 pub mod repeat;
@@ -17,10 +19,10 @@ pub mod unicode;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::HashMap;
 
 use crate::{Selection, Session};
 pub use config::VimConfig;
+pub use marks::MarkTable;
 pub use motion::CharFind;
 pub use registers::{RegType, RegisterBank, RegisterValue};
 pub use repeat::LastVimChange;
@@ -59,6 +61,8 @@ pub enum VimMode {
     Normal,
     /// Standard typing into the document.
     Insert,
+    /// Character overwrite mode (`R`).
+    Replace,
     /// Character-wise visual selection.
     Visual,
     /// Line/paragraph-wise visual selection.
@@ -75,6 +79,7 @@ impl VimMode {
         match self {
             Self::Normal => "-- NORMAL --",
             Self::Insert => "-- INSERT --",
+            Self::Replace => "-- REPLACE --",
             Self::Visual => "-- VISUAL --",
             Self::VisualLine => "-- VISUAL LINE --",
             Self::VisualBlock => "-- VISUAL BLOCK --",
@@ -130,8 +135,12 @@ pub struct VimState {
     pub registers: RegisterBank,
     /// Currently selected register prefix (e.g. `"a` sets this to Some('a')).
     pub current_register: Option<char>,
-    /// Named marks (a-z) mapping to document positions.
-    pub marks: HashMap<char, wordcraft_doc::Pos>,
+    /// Named marks (a-z, A-Z, special marks) mapping to document positions.
+    pub marks: MarkTable,
+    /// Stack of overwritten characters during Replace mode for backspace restore.
+    pub replace_stack: Vec<(wordcraft_doc::Pos, String)>,
+    /// One-shot normal mode flag for `<C-o>` in Insert mode.
+    pub one_shot_normal: bool,
     /// Position before the last jump (for '' and ``).
     pub last_jump: Option<wordcraft_doc::Pos>,
     /// Unicode hex input layer buffer (active when Some).
@@ -171,7 +180,9 @@ impl Default for VimState {
             block_edit: None,
             registers: RegisterBank::default(),
             current_register: None,
-            marks: HashMap::new(),
+            marks: MarkTable::default(),
+            replace_stack: Vec::new(),
+            one_shot_normal: false,
             last_jump: None,
             unicode_hex_layer: None,
             last_visual_sel: None,
@@ -237,76 +248,22 @@ impl VimState {
             }
         }
 
-        match self.mode {
-            VimMode::Insert => self.handle_insert(session, key_name, text, ctrl),
+        let was_normal = self.mode == VimMode::Normal;
+        let handled = match self.mode {
+            VimMode::Insert => insert::handle_insert_key(self, session, key_name, text, ctrl, alt, shift),
+            VimMode::Replace => insert::handle_replace_key(self, session, key_name, text),
             VimMode::Normal => self.handle_normal(session, key_name, text, ctrl, alt, shift),
             VimMode::Visual | VimMode::VisualLine | VimMode::VisualBlock => self.handle_visual(session, key_name, text, ctrl, shift),
             VimMode::Command => self.handle_command(session, key_name, text),
-        }
-    }
+        };
 
-    fn handle_insert(&mut self, session: &mut Session, key_name: &str, text: Option<&str>, ctrl: bool) -> bool {
-        if ctrl && key_name == "Q" {
-            self.unicode_hex_layer = Some(String::new());
-            self.status_msg = Some(unicode::format_display(""));
-            return true;
+        if was_normal && self.one_shot_normal && self.mode == VimMode::Normal && self.pending.is_empty() && self.pending_op.is_none() {
+            self.one_shot_normal = false;
+            self.mode = VimMode::Insert;
+            self.status_msg = None;
         }
 
-        if let Some(mut hex_buf) = self.unicode_hex_layer.clone() {
-            let input_char = text.and_then(|t| t.chars().next());
-            let result = unicode::handle_hex_key(session, &mut hex_buf, key_name, input_char);
-            match result {
-                unicode::HexKeyResult::Continue => {
-                    self.unicode_hex_layer = Some(hex_buf.clone());
-                    self.status_msg = Some(unicode::format_display(&hex_buf));
-                    return true;
-                }
-                unicode::HexKeyResult::Inserted => {
-                    self.unicode_hex_layer = None;
-                    self.status_msg = None;
-                    return true;
-                }
-                unicode::HexKeyResult::Cancel => {
-                    self.unicode_hex_layer = None;
-                    self.status_msg = None;
-                    return true;
-                }
-            }
-        }
-
-        if key_name == "Escape" || (ctrl && key_name == "[") {
-            if let Some(block) = self.block_edit.take()
-                && !self.insert_buf.is_empty()
-            {
-                for line_idx in block.lines {
-                    let pos = wordcraft_doc::Pos::body(line_idx, 0);
-                    if let Some(p) = session.doc.para_at(&pos) {
-                        let target_off = block.col.min(p.len());
-                        session.sel = Selection::caret(wordcraft_doc::Pos::body(line_idx, target_off));
-                        let _ = session.run("text.insert", &json!({"text": self.insert_buf}));
-                    }
-                }
-                session.relayout();
-            }
-
-            match &mut self.last_change {
-                Some(LastVimChange::ChangeToEnd { text }) if text.is_empty() => {
-                    *text = self.insert_buf.clone();
-                }
-                Some(LastVimChange::SubstituteLine { text }) if text.is_empty() => {
-                    *text = self.insert_buf.clone();
-                }
-                _ => {}
-            }
-
-            self.insert_buf.clear();
-            // Step caret left by 1 character, returning to Normal mode (classic Vim behavior).
-            let _ = session.run("caret.left", &json!({}));
-            self.mode = VimMode::Normal;
-            self.reset_pending();
-            return true;
-        }
-        false
+        handled
     }
 
     fn handle_normal(&mut self, session: &mut Session, key_name: &str, text: Option<&str>, ctrl: bool, alt: bool, _shift: bool) -> bool {
@@ -380,14 +337,13 @@ impl VimState {
             return true;
         }
 
-        // Mark operations: m{a-z}, '{a-z}, `{a-z}
+        // Mark operations: m{mark}, '{mark}, `{mark}
         if self.pending == "m" {
-            match input_char {
-                Some(c) if c.is_ascii_lowercase() => {
-                    self.marks.insert(c, session.sel.focus.clone());
-                    self.status_msg = Some(format!("mark '{c}' set"));
-                }
-                _ => {}
+            if let Some(c) = input_char
+                && c.is_ascii_alphanumeric()
+            {
+                self.marks.set(c, session.sel.focus.clone());
+                self.status_msg = Some(format!("mark '{c}' set"));
             }
             self.pending.clear();
             return true;
@@ -397,22 +353,25 @@ impl VimState {
             let exact = self.pending == "`";
             if let Some(c) = input_char {
                 if c == '\'' || c == '`' {
-                    if let Some(pos) = self.last_jump.clone() {
+                    if let Some(pos) = self.marks.last_jump.clone().or_else(|| self.last_jump.clone()) {
                         let cur = session.sel.focus.clone();
                         session.sel = Selection::caret(pos);
+                        self.marks.last_jump = Some(cur.clone());
                         self.last_jump = Some(cur);
                     }
-                } else if c.is_ascii_lowercase() {
-                    if let Some(pos) = self.marks.get(&c).cloned() {
-                        self.last_jump = Some(session.sel.focus.clone());
-                        if exact {
-                            session.sel = Selection::caret(pos);
-                        } else {
-                            session.sel = Selection::caret(wordcraft_doc::Pos { off: 0, ..pos });
-                        }
+                } else if let Some(pos) = self.marks.get(&c) {
+                    let cur = session.sel.focus.clone();
+                    self.marks.last_jump = Some(cur.clone());
+                    self.last_jump = Some(cur);
+                    if exact {
+                        session.sel = Selection::caret(pos);
                     } else {
-                        self.status_msg = Some(format!("E20: Mark not set: {c}"));
+                        let p_idx = pos.path.0.first().copied().unwrap_or(0) as usize;
+                        let off = session.doc.para_at(&pos).map(|p| motion::first_non_blank(&p.text)).unwrap_or(0);
+                        session.sel = Selection::caret(wordcraft_doc::Pos::body(p_idx, off));
                     }
+                } else {
+                    self.status_msg = Some(format!("E20: Mark not set: {c}"));
                 }
             }
             self.pending.clear();
@@ -1282,6 +1241,12 @@ impl VimState {
             }
             Some('r') => {
                 self.replace_char_pending = true;
+                true
+            }
+            Some('R') => {
+                self.mode = VimMode::Replace;
+                self.replace_stack.clear();
+                self.status_msg = Some("-- REPLACE --".to_string());
                 true
             }
             Some('~') => {

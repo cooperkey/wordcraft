@@ -1096,3 +1096,61 @@ fn vim_registers_linewise_and_append() {
     assert!(s2.handle_vim_key("W", Some("w"), false, false, false));
     assert_eq!(s2.vim.registers.get(&'a').map(String::as_str), Some("alpha beta "));
 }
+
+#[test]
+fn vim_replace_mode_and_backspace() {
+    let mut s = new_session("abcdef");
+    s.sel = Selection::caret(Pos::body(0, 1)); // at 'b'
+
+    // 'R' enters Replace mode
+    assert!(s.handle_vim_key("R", Some("R"), false, false, true));
+    assert_eq!(s.vim.mode, VimMode::Replace);
+
+    // Overwrite 'b' with 'X'
+    assert!(s.handle_vim_key("X", Some("X"), false, false, true));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "aXcdef");
+
+    // Overwrite 'c' with 'Y'
+    assert!(s.handle_vim_key("Y", Some("Y"), false, false, true));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "aXYdef");
+
+    // Backspace restores 'c'
+    assert!(s.handle_vim_key("Backspace", None, false, false, false));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "aXcdef");
+
+    // Escape exits Replace mode
+    assert!(s.handle_vim_key("Escape", None, false, false, false));
+    assert_eq!(s.vim.mode, VimMode::Normal);
+}
+
+#[test]
+fn vim_insert_mode_chords_and_one_shot() {
+    // 1. <C-w> deletes previous word in insert mode
+    let mut s = new_session("hello world ");
+    s.vim.mode = VimMode::Insert;
+    s.sel = Selection::caret(Pos::body(0, 12));
+
+    assert!(s.handle_vim_key("W", None, true, false, false));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "hello ");
+
+    // 2. <C-u> deletes to start of line
+    assert!(s.handle_vim_key("U", None, true, false, false));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "");
+
+    // 3. <C-o> one-shot normal mode
+    let mut s2 = new_session("first line\nsecond line");
+    s2.vim.mode = VimMode::Insert;
+    s2.sel = Selection::caret(Pos::body(0, 0));
+
+    // Press <C-o>
+    assert!(s2.handle_vim_key("O", None, true, false, false));
+    assert_eq!(s2.vim.mode, VimMode::Normal);
+    assert!(s2.vim.one_shot_normal);
+
+    // Execute normal motion 'j'
+    assert!(s2.handle_vim_key("J", Some("j"), false, false, false));
+    // Immediately returns to Insert mode!
+    assert_eq!(s2.vim.mode, VimMode::Insert);
+    assert!(!s2.vim.one_shot_normal);
+    assert_eq!(s2.sel.focus.path, Path::top(1));
+}

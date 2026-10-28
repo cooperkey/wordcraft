@@ -28,6 +28,7 @@ fn toggle(s: &mut Session, v: &Value) -> CmdResult {
         "mode": match s.vim.mode {
             VimMode::Normal => "normal",
             VimMode::Insert => "insert",
+            VimMode::Replace => "replace",
             VimMode::Visual => "visual",
             VimMode::VisualLine => "visualLine",
             VimMode::VisualBlock => "visualBlock",
@@ -41,6 +42,7 @@ fn set_mode(s: &mut Session, v: &Value) -> CmdResult {
     let mode = match mode_str {
         "normal" => VimMode::Normal,
         "insert" => VimMode::Insert,
+        "replace" => VimMode::Replace,
         "visual" => VimMode::Visual,
         "visualLine" => VimMode::VisualLine,
         "visualBlock" => VimMode::VisualBlock,
