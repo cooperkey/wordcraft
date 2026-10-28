@@ -1,7 +1,9 @@
 //! Vim mode configuration and keymap customization.
 //!
-//! Loads user preferences and custom key mappings from `~/.config/wordcraft/vim.json` or
-//! `~/.config/wordcraft/init.vim` (on desktop platforms).
+//! Loads user preferences and custom key mappings from:
+//! - `~/.config/wordcraft/init.lua` (Neovim Lua config)
+//! - `~/.config/wordcraft/init.vim` (Vimscript config)
+//! - `~/.config/wordcraft/vim.json` (JSON config)
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -44,7 +46,6 @@ impl Default for VimConfig {
         normal_mappings.insert("<leader>4".to_string(), "style.heading4".to_string());
         normal_mappings.insert("<leader>5".to_string(), "style.heading5".to_string());
         normal_mappings.insert("<leader>6".to_string(), "style.heading6".to_string());
-        normal_mappings.insert("<leader>x".to_string(), "list.bullet".to_string());
         normal_mappings.insert("<leader>e".to_string(), "file.open".to_string());
 
         let mut visual_mappings = BTreeMap::new();
@@ -70,7 +71,7 @@ impl Default for VimConfig {
 }
 
 impl VimConfig {
-    /// Load the configuration from the user's config directory, or default if missing or unreadable.
+    /// Load the configuration from user config directory, or default if missing or unreadable.
     pub fn load() -> Self {
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -86,7 +87,19 @@ impl VimConfig {
         let home = std::env::var_os("HOME").map(std::path::PathBuf::from)?;
         let config_dir = home.join(".config").join("wordcraft");
 
-        // Try vim.json first
+        // 1. Try init.lua (Neovim standard)
+        let lua_path = config_dir.join("init.lua");
+        if let Ok(content) = std::fs::read_to_string(&lua_path) {
+            return Some(Self::parse_lua(&content));
+        }
+
+        // 2. Try init.vim (Vim standard)
+        let vim_path = config_dir.join("init.vim");
+        if let Ok(content) = std::fs::read_to_string(&vim_path) {
+            return Some(Self::parse_vimscript(&content));
+        }
+
+        // 3. Try vim.json (WordCraft JSON format)
         let json_path = config_dir.join("vim.json");
         if let Ok(content) = std::fs::read_to_string(&json_path)
             && let Ok(cfg) = serde_json::from_str::<VimConfig>(&content)
@@ -94,16 +107,63 @@ impl VimConfig {
             return Some(cfg);
         }
 
-        // Try init.vim with vim-script like directives
-        let vim_path = config_dir.join("init.vim");
-        if let Ok(content) = std::fs::read_to_string(&vim_path) {
-            return Some(Self::parse_vimscript(&content));
-        }
-
         None
     }
 
-    /// Parse simple vimrc lines like `let mapleader = " "` and `nnoremap lhs rhs`.
+    /// Parse Neovim `init.lua` directives:
+    /// - `vim.g.mapleader = " "`
+    /// - `vim.keymap.set('n', lhs, rhs)`
+    /// - `vim.opt.number = true`
+    /// - `vim.opt.relativenumber = true`
+    pub fn parse_lua(content: &str) -> Self {
+        let mut cfg = Self::default();
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with("--") {
+                continue;
+            }
+
+            // vim.g.mapleader = " "
+            if let Some(rest) = trimmed.strip_prefix("vim.g.mapleader") {
+                let val = rest.trim().trim_start_matches('=').trim();
+                let leader = val.trim_matches('"').trim_matches('\'');
+                if !leader.is_empty() {
+                    cfg.leader = leader.to_string();
+                }
+            }
+            // vim.opt.number = true / false
+            else if let Some(rest) = trimmed.strip_prefix("vim.opt.number") {
+                let val = rest.trim().trim_start_matches('=').trim();
+                cfg.line_numbers = val.starts_with("true");
+            }
+            // vim.opt.relativenumber = true / false
+            else if let Some(rest) = trimmed.strip_prefix("vim.opt.relativenumber") {
+                let val = rest.trim().trim_start_matches('=').trim();
+                cfg.relative_numbers = val.starts_with("true");
+            }
+            // vim.keymap.set(mode, lhs, rhs, ...)
+            else if let Some(rest) = trimmed.strip_prefix("vim.keymap.set(")
+                && let Some(close_paren) = rest.rfind(')')
+            {
+                let args = &rest[..close_paren];
+                let parts: Vec<&str> = args.split(',').map(str::trim).collect();
+                if parts.len() >= 3 {
+                    let mode_part = parts[0].trim_matches(|c| c == '\'' || c == '"' || c == '{' || c == '}');
+                    let lhs = parts[1].trim_matches('"').trim_matches('\'');
+                    let rhs = parts[2].trim_matches('"').trim_matches('\'');
+                    if mode_part.contains('n') {
+                        cfg.normal_mappings.insert(lhs.to_string(), rhs.to_string());
+                    }
+                    if mode_part.contains('v') {
+                        cfg.visual_mappings.insert(lhs.to_string(), rhs.to_string());
+                    }
+                }
+            }
+        }
+        cfg
+    }
+
+    /// Parse Vimscript lines like `let mapleader = " "` and `nnoremap lhs rhs`.
     pub fn parse_vimscript(content: &str) -> Self {
         let mut cfg = Self::default();
         for line in content.lines() {
@@ -134,6 +194,14 @@ impl VimConfig {
                 if mode == "insert" || mode == "normal" {
                     cfg.default_mode = mode.to_string();
                 }
+            } else if trimmed == "set number" || trimmed == "set nu" {
+                cfg.line_numbers = true;
+            } else if trimmed == "set nonumber" || trimmed == "set nonu" {
+                cfg.line_numbers = false;
+            } else if trimmed == "set relativenumber" || trimmed == "set rnu" {
+                cfg.relative_numbers = true;
+            } else if trimmed == "set norelativenumber" || trimmed == "set nornu" {
+                cfg.relative_numbers = false;
             }
         }
         cfg

@@ -1154,3 +1154,141 @@ fn vim_insert_mode_chords_and_one_shot() {
     assert!(!s2.vim.one_shot_normal);
     assert_eq!(s2.sel.focus.path, Path::top(1));
 }
+
+#[test]
+fn vim_ex_range_delete_and_yank() {
+    let mut s = new_session("line 1\nline 2\nline 3\nline 4");
+    assert_eq!(s.doc.body.len(), 4);
+
+    // Delete lines 2 to 3 into register 'a'
+    let res = crate::vim::ex::execute_ex(&mut s, "2,3d a");
+    assert!(!res.is_error);
+    assert_eq!(s.doc.body.len(), 2);
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "line 1");
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).unwrap().text, "line 4");
+
+    // Check register 'a'
+    assert_eq!(s.vim.registers.get(&'a').unwrap(), "line 2\nline 3");
+
+    // Yank whole buffer into register 'b'
+    let res = crate::vim::ex::execute_ex(&mut s, "%y b");
+    assert!(!res.is_error);
+    assert_eq!(s.vim.registers.get(&'b').unwrap(), "line 1\nline 4");
+}
+
+#[test]
+fn vim_ex_range_substitute_advanced() {
+    let mut s = new_session("apple apple\nbanana apple\ncherry cherry");
+
+    // Substitute apple with orange on lines 1 and 2
+    let res = crate::vim::ex::execute_ex(&mut s, "1,2s/apple/orange/g");
+    assert!(!res.is_error);
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "orange orange");
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).unwrap().text, "banana orange");
+    assert_eq!(s.doc.para_at(&Pos::body(2, 0)).unwrap().text, "cherry cherry");
+
+    // Case-insensitive substitute on line 3
+    let res = crate::vim::ex::execute_ex(&mut s, "3s/CHERRY/berry/i");
+    assert!(!res.is_error);
+    assert_eq!(s.doc.para_at(&Pos::body(2, 0)).unwrap().text, "berry cherry");
+}
+
+#[test]
+fn vim_ex_range_sort_commands() {
+    let mut s = Session::new(Document::new());
+    s.prefs.autocorrect.enabled = false;
+    s.vim.enabled = true;
+    s.vim.mode = VimMode::Normal;
+    for line in &["cherry", "apple", "banana"] {
+        let _ = s.run("text.insert", &json!({"text": line}));
+        let _ = s.run("text.newParagraph", &json!({}));
+    }
+    // Delete the empty trailing paragraph
+    s.doc.body.pop();
+
+    let res = crate::vim::ex::execute_ex(&mut s, "%sort");
+    assert!(!res.is_error);
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "apple");
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).unwrap().text, "banana");
+    assert_eq!(s.doc.para_at(&Pos::body(2, 0)).unwrap().text, "cherry");
+
+    // Numeric sort
+    let mut s2 = new_session("10\n2\n100\n20");
+    let res = crate::vim::ex::execute_ex(&mut s2, "%sort n");
+    assert!(!res.is_error);
+    assert_eq!(s2.doc.para_at(&Pos::body(0, 0)).unwrap().text, "2");
+    assert_eq!(s2.doc.para_at(&Pos::body(1, 0)).unwrap().text, "10");
+    assert_eq!(s2.doc.para_at(&Pos::body(2, 0)).unwrap().text, "20");
+    assert_eq!(s2.doc.para_at(&Pos::body(3, 0)).unwrap().text, "100");
+
+    // Reverse numeric sort
+    let res = crate::vim::ex::execute_ex(&mut s2, "%sort !n");
+    assert!(!res.is_error);
+    assert_eq!(s2.doc.para_at(&Pos::body(0, 0)).unwrap().text, "100");
+    assert_eq!(s2.doc.para_at(&Pos::body(1, 0)).unwrap().text, "20");
+    assert_eq!(s2.doc.para_at(&Pos::body(2, 0)).unwrap().text, "10");
+    assert_eq!(s2.doc.para_at(&Pos::body(3, 0)).unwrap().text, "2");
+
+    // Reverse alphabetical sort
+    let res = crate::vim::ex::execute_ex(&mut s, "%sort !");
+    assert!(!res.is_error);
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "cherry");
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).unwrap().text, "banana");
+    assert_eq!(s.doc.para_at(&Pos::body(2, 0)).unwrap().text, "apple");
+}
+
+#[test]
+fn vim_ex_range_norm_execution() {
+    let mut s = new_session("let a = 1;\nlet b = 2;");
+    let res = crate::vim::ex::execute_ex(&mut s, "%norm I// ");
+    assert!(!res.is_error);
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "// let a = 1;");
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).unwrap().text, "// let b = 2;");
+}
+
+#[test]
+fn vim_ex_global_pattern_delete() {
+    let mut s = new_session("keep this\ndelete this line\nkeep that\ndelete another line");
+    assert_eq!(s.doc.body.len(), 4);
+
+    let res = crate::vim::ex::execute_ex(&mut s, "g/delete/d");
+    assert!(!res.is_error);
+    assert_eq!(s.doc.body.len(), 2);
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "keep this");
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).unwrap().text, "keep that");
+}
+
+#[test]
+fn vim_lua_and_vimscript_config_parsing() {
+    let lua = r#"
+        -- WordCraft Neovim Config
+        vim.g.mapleader = ","
+        vim.opt.number = true
+        vim.opt.relativenumber = true
+        vim.keymap.set('n', '<leader>w', ':w')
+        vim.keymap.set('v', '<leader>y', '"+y')
+    "#;
+
+    let cfg = crate::vim::VimConfig::parse_lua(lua);
+    assert_eq!(cfg.leader, ",");
+    assert!(cfg.line_numbers);
+    assert!(cfg.relative_numbers);
+    assert_eq!(cfg.normal_mappings.get("<leader>w"), Some(&":w".to_string()));
+    assert_eq!(cfg.visual_mappings.get("<leader>y"), Some(&"\"+y".to_string()));
+
+    let vimscript = r#"
+        " Vim test config
+        let mapleader = " "
+        set number
+        set relativenumber
+        nnoremap <leader>s :w
+        vnoremap <leader>c "+y
+    "#;
+
+    let cfg2 = crate::vim::VimConfig::parse_vimscript(vimscript);
+    assert_eq!(cfg2.leader, " ");
+    assert!(cfg2.line_numbers);
+    assert!(cfg2.relative_numbers);
+    assert_eq!(cfg2.normal_mappings.get("<leader>s"), Some(&":w".to_string()));
+    assert_eq!(cfg2.visual_mappings.get("<leader>c"), Some(&"\"+y".to_string()));
+}
